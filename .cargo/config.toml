@@ -1,0 +1,6 @@
+[alias]
+wasm = "build --target wasm32-unknown-unknown --release"
+w = "build --target wasm32-unknown-unknown --release"
+wasm-debug = "build --target wasm32-unknown-unknown"
+wd = "build --target wasm32-unknown-unknown"
+
