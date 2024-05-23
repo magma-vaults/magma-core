@@ -1,7 +1,7 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Deps, StdResult};
 
-use crate::state::{VaultManager, VaultParametersConfig, VaultRebalancer};
+use crate::state::{VaultParametersConfig, VaultRebalancer};
 
 #[cw_serde]
 pub struct TokenInfo {
@@ -21,7 +21,7 @@ pub enum VaultRebalancerInstantiationMsg {
 #[cw_serde]
 pub struct InstantiateMsg {
     pub pool: String,
-    pub manager: VaultManager,
+    pub admin: Option<String>,
     pub rebalancer: VaultRebalancerInstantiationMsg,
     pub config: VaultParametersConfig,
 }
@@ -30,9 +30,10 @@ impl VaultRebalancerInstantiationMsg {
     pub fn addr_validate(self, deps: Deps) -> StdResult<VaultRebalancer> {
         use VaultRebalancer::*;
         match self {
-            Self::Delegate { rebalancer } => Ok(Delegate { rebalancer: deps.api.addr_validate(&rebalancer)? }),
+            Self::Delegate { rebalancer: x } => Ok(Delegate {rebalancer: deps.api.addr_validate(&x)?}),
             Self::Admin {} => Ok(Admin {}),
             Self::Anyone {} => Ok(Anyone {}),
         }
     }
 }
+

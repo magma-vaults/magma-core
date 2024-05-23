@@ -2,19 +2,10 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Addr;
 use cw_storage_plus::Item;
 
-use crate::{error::ContractError, msg::InstantiateMsg};
 
 /// TODO 
 #[cw_serde]
 pub struct VaultParametersConfig {
-}
-
-#[cw_serde]
-pub enum VaultManager {
-    /// If `None`, then the Vault is immutable and you cant change its parameters.
-    None {},
-    /// In any other case, the contract admin will be able to reconfigure the vault.
-    Admin {},
 }
 
 #[cw_serde]
@@ -31,7 +22,7 @@ pub enum VaultRebalancer {
 #[cw_serde]
 pub struct VaultState {
     pub pool: Addr,
-    pub manager: VaultManager,
+    pub admin: Option<Addr>,
     pub rebalancer: VaultRebalancer,
     pub config: VaultParametersConfig,
 }
