@@ -37,3 +37,8 @@ impl VaultRebalancerInstantiationMsg {
     }
 }
 
+
+#[cw_serde]
+pub enum ExecuteMsg {
+    Test {},
+}

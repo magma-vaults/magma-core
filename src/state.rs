@@ -10,7 +10,7 @@ pub struct VaultParametersConfig {
 
 #[cw_serde]
 pub enum VaultRebalancer {
-    /// Only the contract admin can trigger rebalances.
+    /// Only the contract admin can trigger rebalances
     Admin {},
     /// Any delegated address decided by the admin can trigger rebalances.
     Delegate { rebalancer: Addr },
