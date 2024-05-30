@@ -1,4 +1,5 @@
 use cosmwasm_std::StdError;
+use cw_utils::PaymentError;
 use thiserror::Error;
 
  
@@ -8,5 +9,8 @@ pub enum ContractError {
     Std(#[from] StdError),
 
     #[error("Invalid contract config")]
-    InvalidConfig {}
+    InvalidConfig {},
+
+    #[error("Payment error: {0}")]
+    Payment(#[from] PaymentError)
 }

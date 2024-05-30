@@ -23,7 +23,7 @@ pub struct InstantiateMsg {
     pub pool: String,
     pub admin: Option<String>,
     pub rebalancer: VaultRebalancerInstantiationMsg,
-    pub config: VaultParametersConfig,
+    pub config: VaultParametersConfig
 }
 
 impl VaultRebalancerInstantiationMsg {
@@ -40,5 +40,5 @@ impl VaultRebalancerInstantiationMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
-    Test {},
+    Test {}
 }
