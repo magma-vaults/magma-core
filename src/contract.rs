@@ -1,8 +1,8 @@
-use cosmwasm_std::{entry_point, to_json_binary, Addr, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response, StdResult};
+use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response, StdResult};
 
 use crate::{
     error::ContractError, msg::{ExecuteMsg, InstantiateMsg}, state::{
-        VaultRebalancer, VaultState, VAULT_STATE
+        VaultRebalancer, VAULT_STATE
     }
 };
 
@@ -15,30 +15,18 @@ pub fn instantiate(
     msg: InstantiateMsg
 ) -> Result<Response, ContractError> {
 
-    /*
-    let admin = if let Some(addr) = &msg.admin {
-        Some(deps.api.addr_validate(addr)?)
-    } else { 
-        None 
-    };
+    let state = msg
+        .validate(deps.as_ref())
+        .ok_or(ContractError::InvalidConfig {})?;
 
-    // TODO Ignore pool addrs, only pool ids matter.
-    let vault_state = VaultState {
-        pool: deps.api.addr_validate(&msg.pool)?,
-        admin,
-        rebalancer: msg.rebalancer.addr_validate(deps.as_ref())?,
-        config: msg.config
-    };
-
-    if let None = vault_state.admin {
-        match vault_state.rebalancer {
+    if let None = state.vault_management_config.admin {
+        match state.vault_management_config.rebalancer {
             VaultRebalancer::Anyone {} => Ok(()),
             _ => Err(ContractError::InvalidConfig {}),
         }?
     }
-    
-    VAULT_STATE.save(deps.storage, &vault_state)?;
-    */
+
+    VAULT_STATE.save(deps.storage, &state)?;
     Ok(Response::new())
 }
 
@@ -49,27 +37,27 @@ pub fn query(_deps: Deps, _env: Env, _msg: Empty) -> StdResult<Binary> {
 
 #[entry_point]
 pub fn execute(
-    _deps: DepsMut,
+    deps: DepsMut,
     env: Env,
     _info: MessageInfo,
     msg: ExecuteMsg
 ) -> Result<Response, ContractError> {
     match msg {
-        ExecuteMsg::Test {} => Ok(exec::test_swap(env)?)
+        ExecuteMsg::Test {} => Ok(exec::test_swap(env, deps.as_ref())?)
     }
 }
 
 mod exec {
+
     use osmosis_std::types::{
-        cosmos::base::v1beta1::Coin,
-        osmosis::poolmanager::v1beta1::{
-            MsgSwapExactAmountIn, SwapAmountInRoute
-        }
-    };
+        cosmos::base::v1beta1::Coin, osmosis::{
+            gamm::v1beta1::MsgSwapExactAmountIn, poolmanager::v1beta1::SwapAmountInRoute
+        }};
 
     use super::*;
 
-    pub fn test_swap(env: Env) -> Result<Response, ContractError> {
+    pub fn test_swap(env: Env, _deps: Deps) -> Result<Response, ContractError> {
+
         let sender = env.contract.address.to_string();
         
         // Pool id from a testnet tx I did.
@@ -80,7 +68,8 @@ mod exec {
             "ibc/9FF2B7A5F55038A7EE61F4FD6749D9A648B48E89830F2682B67B5DC158E2753C"
             .to_string();
 
-        // TODO We can call `CalcOutAmtGivenIn` to get our amounts!
+        // TODO We can call `CalcOutAmtGivenIn` to get our amounts! Or a querier
+        // in general!
         let coin_in = Coin {
             denom: "uosmo".to_string(),
             amount: 1000.to_string()
