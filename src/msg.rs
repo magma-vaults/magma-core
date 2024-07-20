@@ -106,6 +106,16 @@ impl InstantiateMsg {
 
 
 #[cw_serde]
-pub enum ExecuteMsg {
-    Test {}
+pub struct DepositMsg {
+    pub amount0: u128,
+    pub amount1: u128,
+    pub amount0_min: u128,
+    pub amount1_min: u128,
+    pub to: String
 }
+
+#[cw_serde]
+pub enum ExecuteMsg {
+    Deposit(DepositMsg)
+}
+

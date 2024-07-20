@@ -21,6 +21,11 @@ osmosis-std = "0.25.0"
 # osmosis-std-derive = "0.20.1"
 cw-utils = "1.0.0"
 
+cw20-base = { version = "1.1.2", features = ["library"] }
+cw20 = "1.1.2"
+
+readonly = "0.2.12"
+
 [dev-dependencies]
 cw-multi-test = "1.0.0"
 

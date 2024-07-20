@@ -8,9 +8,18 @@ pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
 
+    #[error("cw20 error: {0}")]
+    Cw20(#[from] cw20_base::ContractError),
+
     #[error("Invalid contract config")]
     InvalidConfig {},
 
     #[error("Payment error: {0}")]
-    Payment(#[from] PaymentError)
+    Payment(#[from] PaymentError),
+
+    #[error("Invalid deposit")]
+    InvalidDeposit {},
+
+    #[error("Invalid pool_id: {0}")]
+    InvalidPoolId(u64),
 }
