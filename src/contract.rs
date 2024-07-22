@@ -1,10 +1,9 @@
 use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response, StdResult};
 use cw20_base::contract::{execute_mint, query_token_info};
-use osmosis_std::types::osmosis::{self, concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier};
 
 use crate::{
-    error::ContractError, msg::{ExecuteMsg, InstantiateMsg, VaultInfoInstantaiteMsg, VaultParametersInstantiateMsg}, state::{
-        PoolId, VaultRebalancer, Weight, VAULT_STATE
+    error::ContractError, msg::{ExecuteMsg, InstantiateMsg}, state::{
+        VaultInfo, VaultParameters, VAULT_INFO, VAULT_PARAMETERS
     }
 };
 
@@ -16,46 +15,23 @@ pub fn instantiate(
     msg: InstantiateMsg
 ) -> Result<Response, ContractError> {
 
-    let VaultInfoInstantaiteMsg { pool_id, denom0, denom1, .. } = msg.vault_info;
-    let qq = deps.querier;
-    let q = PoolmanagerQuerier::new(&deps.querier);
+    let vault_info = VaultInfo::new(msg.vault_info, deps.as_ref())?;
+    VAULT_INFO.save(deps.storage, &vault_info)?;
 
-    let pool_id = PoolId::new(msg.vault_info.pool_id, &deps.querier)
-        .ok_or(ContractError::InvalidConfig {})?;
+    let vault_parameters = VaultParameters::new(msg.vault_parameters, vault_info, &deps.querier)?;
+    VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
 
-    let pool = pool_id.to_pool(&deps.querier);
+    // let pool = vault_info.pool_id.to_pool(&deps.querier);
 
-    // NOTE TODO FIXME We dont need to pass those as args anymore!
-    // Same for tick spacing!
-    let denom0 = msg.vault_info.denom0;
-    let denom1 = msg.vault_info.denom1;
-    if let Some(serialized_pool) = q.pool(pool_id)?.pool {
-        // The pool could only not be deserialized if `pool_id` does not refer
-        // to a valid concentrated liquidity pool.
-        let p = Pool::try_from(serialized_pool)
-            .map_err(|_| ContractError::InvalidPoolId(pool_id))?;
-        
-        assert!(p.id == pool_id);
-    }
+    // let base_pos = MsgCreatePosition {
+    //     pool_id: pool.id,
+    //     sender: info.sender.to_string(),
+    //     lower_tick: pool.current_tick - vault_parameters.base_threshold.0.into(),
+    //     upper_tick: pool.current_tick + vault_parameters.base_threshold.0.into(),
+    //     tokens_provided: vec![],
+    // };
 
-    let state = msg
-        .validate(deps.as_ref())
-        .ok_or(ContractError::InvalidConfig {})?;
 
-    if let None = state.vault_management_config.admin {
-        match state.vault_management_config.rebalancer {
-            VaultRebalancer::Anyone {} => Ok(()),
-            _ => Err(ContractError::InvalidConfig {}),
-        }?
-    }
-
-    // Creating the 3 positions?
-    let pos1 = MsgCreatePosition {
-        pool_id: msg.vault_info.pool_id
-        // lower_tick: msg.
-    };
-
-    VAULT_STATE.save(deps.storage, &state)?;
     Ok(Response::new())
 }
 
