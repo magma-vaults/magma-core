@@ -8,7 +8,9 @@ use osmosis_std::types::osmosis::{
 
 use readonly;
 
-use crate::{error::ContractError, msg::{VaultInfoInstantaiteMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
+use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantaiteMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
+use crate::constants::MAX_TICK;
+use std::cmp::{self, min_by, min_by_key};
 
 /// 6 decimal point precision weight, represented internally as an `u32`.
 #[cw_serde] #[readonly::make]
@@ -22,13 +24,10 @@ impl Weight {
 }
 
 #[cw_serde] #[readonly::make]
-pub struct Tick(pub u64);
-impl Tick {
-    pub fn new(value: u64, pool_id: PoolId, querier: &QuerierWrapper) -> Option<Self> {
-        let spacing = pool_id.to_pool(querier).tick_spacing;
-        (value % spacing == 0).then_some(Self(value))
-    }
-}
+pub struct NonNegTick(pub u64);
+
+#[cw_serde] #[readonly::make]
+pub struct Tick(pub i64);
 
 #[cw_serde] #[readonly::make]
 pub struct PoolId(pub u64);
@@ -41,12 +40,65 @@ impl PoolId {
         Pool::try_from(encoded_pool).ok().and(Some(Self(pool_id)))
     }
 
-    pub fn to_pool(self, querier: &QuerierWrapper) -> Pool {
+    pub fn to_pool(&self, querier: &QuerierWrapper) -> Pool {
         let querier = PoolmanagerQuerier::new(querier);
         // Invariant: We already verified that `id` refers to a valid pool.
         querier.pool(self.0).unwrap().pool.unwrap().try_into().unwrap()
     }
+
+    pub fn tick_spacing(&self, querier: &QuerierWrapper) -> u64 {
+        self.to_pool(querier).tick_spacing
+    }
+
+    pub fn new_non_neg_tick(&self, value: u64, querier: &QuerierWrapper) -> Option<NonNegTick> {
+        let spacing = self.tick_spacing(querier);
+        (value % spacing == 0 && value <= MAX_TICK as u64).then_some(NonNegTick(value))
+    }
+
+    pub fn new_tick(&self, value: i64, querier: &QuerierWrapper) -> Option<Tick> {
+        // Invariant: `spacing` will never be above `2**63`.
+        let spacing = self.tick_spacing(querier) as i64;
+        (value % spacing == 0 && value <= MAX_TICK && value >= MIN_TICK)
+            .then_some(Tick(value))
+    }
+
+    pub fn closest_valid_tick(&self, value: i64, querier: &QuerierWrapper) -> Tick {
+        let spacing = self.tick_spacing(querier) as i64;
+
+        // Ceil on MIN, floor on MAX. 
+        // Wont overflow as long as MIN and MAX are reasonable.
+        let value_or_bound = |value|
+            if value < MIN_TICK { ((MIN_TICK + spacing - 1)/spacing) * spacing }
+            else if value > MAX_TICK { (MAX_TICK/spacing) * spacing }
+            else { value };
+        
+        let value = value_or_bound(value);
+        let floor = value_or_bound((value/spacing) * spacing);
+        let ceil = value_or_bound((value/spacing + 1) * spacing);
+        
+        Tick(min_by_key(floor, ceil, |x| (x - value).abs()))
+    }
 }
+
+impl Tick {
+    pub fn abs(self) -> NonNegTick {
+        // Invariant: Woknt overflow because `-2**63 > -2**64`.
+        NonNegTick(self.0.abs() as u64)
+    }
+}
+
+// pub struct Tick2(i64);
+// impl Tick2 {
+//     pub fn new(value: i64, pool_id: PoolId, querier: &QuerierWrapper) -> Option<Self> {
+//         // Invariant: `spacing` will never be above `2**63`.
+//         let spacing = pool_id.to_pool(querier).tick_spacing as i64;
+//         (value % spacing == 0 && value <= MAX_TICK && value >= MIN_TICK)
+//             .then_some(Self(value))
+//     }
+// 
+//     pub fn floor_to_spacing(value: i64, pool_id: PoolId
+// }
+
 
 
 #[cw_serde]
@@ -124,6 +176,14 @@ impl VaultInfo {
             pool_id, rebalancer, admin,
             vault_name: info.vault_name, vault_symbol: info.vault_symbol
         })
+    }
+
+    pub fn demon0(&self, querier: &QuerierWrapper) -> String {
+        self.pool_id.to_pool(querier).token0
+    }
+
+    pub fn demon1(&self, querier: &QuerierWrapper) -> String {
+        self.pool_id.to_pool(querier).token1
     }
 }
 
