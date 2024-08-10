@@ -1,3 +1,3 @@
 
-pub const MIN_TICK: i64 = -887272;
-pub const MAX_TICK: i64 = -MIN_TICK;
+pub const MIN_TICK: i64 = -108000000;
+pub const MAX_TICK: i64 = 342000000;

@@ -4,11 +4,11 @@ use cosmwasm_schema::cw_serde;
 pub struct VaultParametersInstantiateMsg {
     pub base_threshold: u64,
     pub limit_threshold: u64,
-    pub full_range_weight: u64 
+    pub full_range_weight: u128
 }
 
 #[cw_serde]
-pub struct VaultInfoInstantaiteMsg {
+pub struct VaultInfoInstantiateMsg {
     pub pool_id: u64,
     pub vault_name: String,
     pub vault_symbol: String,
@@ -29,7 +29,7 @@ pub enum VaultRebalancerInstantiateMsg {
 
 #[cw_serde]
 pub struct InstantiateMsg {
-    pub vault_info: VaultInfoInstantaiteMsg,
+    pub vault_info: VaultInfoInstantiateMsg,
     pub vault_parameters: VaultParametersInstantiateMsg
 }
 

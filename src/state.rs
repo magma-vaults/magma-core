@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, QuerierWrapper, Deps};
+use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool,
@@ -8,19 +8,19 @@ use osmosis_std::types::osmosis::{
 
 use readonly;
 
-use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantaiteMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
+use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
 use crate::constants::MAX_TICK;
-use std::cmp::{self, min_by, min_by_key};
+use std::cmp::min_by_key;
 
-/// 6 decimal point precision weight, represented internally as an `u32`.
 #[cw_serde] #[readonly::make]
-pub struct Weight(pub u64);
+pub struct Weight(pub Decimal);
 impl Weight {
-    pub fn new(value: u64) -> Option<Self> {
-        (value <= u64::pow(10, 6)).then_some(Self(value))
-    }
+    const MAX: Decimal = Decimal::one();
 
-    const MAX: u64 = u64::pow(10, 6);
+    pub fn new(value: u128) -> Option<Self> {
+        let value = Decimal::new(Uint128::new(value));
+        (value <= Self::MAX).then_some(Self(value))
+    }
 }
 
 #[cw_serde] #[readonly::make]
@@ -46,69 +46,49 @@ impl PoolId {
         querier.pool(self.0).unwrap().pool.unwrap().try_into().unwrap()
     }
 
-    pub fn tick_spacing(&self, querier: &QuerierWrapper) -> u64 {
-        self.to_pool(querier).tick_spacing
+    fn tick_spacing(&self, querier: &QuerierWrapper) -> i64 {
+        // Invariant: Wont overflow under reasonable conditions.
+        self.to_pool(querier).tick_spacing as i64
     }
 
-    pub fn new_non_neg_tick(&self, value: u64, querier: &QuerierWrapper) -> Option<NonNegTick> {
+    /// Min possible tick taking into account the pool tick spacing.
+    pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> Tick {
         let spacing = self.tick_spacing(querier);
-        (value % spacing == 0 && value <= MAX_TICK as u64).then_some(NonNegTick(value))
+        Tick(((MIN_TICK + spacing + 1)/spacing) * spacing)
     }
 
-    pub fn new_tick(&self, value: i64, querier: &QuerierWrapper) -> Option<Tick> {
-        // Invariant: `spacing` will never be above `2**63`.
-        let spacing = self.tick_spacing(querier) as i64;
-        (value % spacing == 0 && value <= MAX_TICK && value >= MIN_TICK)
-            .then_some(Tick(value))
+    /// Max possible tick taking into account the pool tick spacing.
+    pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> Tick {
+        let spacing = self.tick_spacing(querier);
+        Tick((MAX_TICK/spacing) * spacing)
     }
 
     pub fn closest_valid_tick(&self, value: i64, querier: &QuerierWrapper) -> Tick {
-        let spacing = self.tick_spacing(querier) as i64;
+        let spacing = self.tick_spacing(querier);
+        let lower = (value/spacing) * spacing;
+        let upper = (value/spacing + 1) * spacing;
+        let closest = min_by_key(lower, upper, |x| (x - value).abs());
 
-        // Ceil on MIN, floor on MAX. 
-        // Wont overflow as long as MIN and MAX are reasonable.
-        let value_or_bound = |value|
-            if value < MIN_TICK { ((MIN_TICK + spacing - 1)/spacing) * spacing }
-            else if value > MAX_TICK { (MAX_TICK/spacing) * spacing }
-            else { value };
-        
-        let value = value_or_bound(value);
-        let floor = value_or_bound((value/spacing) * spacing);
-        let ceil = value_or_bound((value/spacing + 1) * spacing);
-        
-        Tick(min_by_key(floor, ceil, |x| (x - value).abs()))
+        if closest < MIN_TICK { self.min_valid_tick(querier) }
+        else if closest > MAX_TICK { self.max_valid_tick(querier) }
+        else { Tick(closest) }
     }
 }
 
 impl Tick {
-    pub fn abs(self) -> NonNegTick {
-        // Invariant: Woknt overflow because `-2**63 > -2**64`.
-        NonNegTick(self.0.abs() as u64)
-    }
+    fn abs(self) -> NonNegTick { NonNegTick(self.0.unsigned_abs()) }
 }
-
-// pub struct Tick2(i64);
-// impl Tick2 {
-//     pub fn new(value: i64, pool_id: PoolId, querier: &QuerierWrapper) -> Option<Self> {
-//         // Invariant: `spacing` will never be above `2**63`.
-//         let spacing = pool_id.to_pool(querier).tick_spacing as i64;
-//         (value % spacing == 0 && value <= MAX_TICK && value >= MIN_TICK)
-//             .then_some(Self(value))
-//     }
-// 
-//     pub fn floor_to_spacing(value: i64, pool_id: PoolId
-// }
-
-
 
 #[cw_serde]
 pub struct VaultParameters {
-    pub base_threshold: Tick,
-    pub limit_threshold: Tick,
+    // Non negative tick values, zero if we want the position to be null.
+    pub base_threshold: NonNegTick,
+    pub limit_threshold: NonNegTick,
+    // cosmwasm_std::Decimal weight, zero if we dont want a full range position.
     pub full_range_weight: Weight,
     // Position Ids are optional because: 
     // 1. Positions are oly created on rebalances.
-    // 2. If any of the params is 0, then the position for them might be None.
+    // 2. If any of the params is 0, then the position id for them might be None.
     pub base_position_id: Option<u64>,
     pub limit_position_id: Option<u64>,
     pub full_range_position_id: Option<u64>
@@ -120,24 +100,36 @@ impl VaultParameters {
         vault_info: VaultInfo,
         querier: &QuerierWrapper
     ) -> Result<Self, ContractError> {
-        let base_threshold = Tick::new(
-            params.base_threshold, vault_info.pool_id.clone(), querier
-        ).ok_or(ContractError::InvalidConfig {})?;
 
-        let limit_threshold = Tick::new(
-            params.limit_threshold, vault_info.pool_id.clone(), querier
-        ).ok_or(ContractError::InvalidConfig {})?;
+        let base_threshold: i64 = params
+            .base_threshold
+            .try_into()
+            .unwrap_or(i64::MAX);
+
+        let base_threshold = vault_info
+            .pool_id
+            .closest_valid_tick(base_threshold, querier)
+            .abs();
+        
+        let limit_threshold: i64 = params
+            .limit_threshold
+            .try_into()
+            .unwrap_or(i64::MAX);
+
+        let limit_threshold = vault_info
+            .pool_id
+            .closest_valid_tick(limit_threshold, querier)
+            .abs();
 
         let full_range_weight = Weight::new(params.full_range_weight)
             .ok_or(ContractError::InvalidConfig {})?;
 
-        if base_threshold.0 == 0 &&
-           limit_threshold.0 == 0 &&
-           full_range_weight.0 != Weight::MAX 
-        {
-            return Err(ContractError::InvalidConfig {})
+        if base_threshold.0 + limit_threshold.0 == 0 {
+            if full_range_weight.0 != Weight::MAX {
+                return Err(ContractError::InvalidConfig {})
+            }
         }
-
+        
         Ok(VaultParameters {
             base_threshold, limit_threshold, full_range_weight,
             base_position_id: None, limit_position_id: None, full_range_position_id: None
@@ -155,7 +147,7 @@ pub struct VaultInfo {
 }
 
 impl VaultInfo {
-    pub fn new(info: VaultInfoInstantaiteMsg, deps: Deps) -> Result<Self, ContractError> {
+    pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, ContractError> {
         let pool_id = PoolId::new(info.pool_id, &deps.querier)
             .ok_or(ContractError::InvalidConfig {})?;
 
@@ -202,9 +194,10 @@ impl VaultRebalancer {
     pub fn new(rebalancer: VaultRebalancerInstantiateMsg, deps: Deps) -> Result<Self, ContractError> {
         use VaultRebalancerInstantiateMsg::*;
         match rebalancer {
-            Delegate { rebalancer: x } => Ok(Self::Delegate {
-                rebalancer: deps.api.addr_validate(&x)?
-            }),
+            Delegate { rebalancer: x } => {
+                let rebalancer = deps.api.addr_validate(&x)?;
+                Ok(Self::Delegate { rebalancer })
+            },
             Admin {} => Ok(Self::Admin {}),
             Anyone {} => Ok(Self::Anyone {}),
               
@@ -214,4 +207,5 @@ impl VaultRebalancer {
 
 pub const VAULT_INFO: Item<VaultInfo> = Item::new("vault_info");
 pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters");
+
 

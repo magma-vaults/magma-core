@@ -94,7 +94,7 @@ mod exec {
             return Err(ContractError::InvalidDeposit {})
         }
 
-        // TODO Whats MINIMUM_LIQUIDITY?
+        // TODO Whats `MINIMUM_LIQUIDITY`?
         let (new_shares, amount0_used, amount1_used) = {
             let total_supply = query_token_info(deps.as_ref())?.total_supply;
 
@@ -150,10 +150,10 @@ mod exec {
 
         // TODO Withdraw current liquidities.
 
-        // TODO Create new positions.
         let vault_info = VAULT_INFO.load(deps.storage)?;
         let vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
-        let pool = vault_info.pool_id.to_pool(&deps.querier);
+        let pool_id = vault_info.pool_id;
+        let pool = pool_id.to_pool(&deps.querier);
         let contract_addr = env.contract.address.to_string();
 
         let balances = BankQuerier::new(&deps.querier);
@@ -171,12 +171,15 @@ mod exec {
         } else { Uint128::zero() };
 
 
+        // Full range position. TODO HOW... Calc liquidities... it should be possible.
+
         let full_range_pos = MsgCreatePosition {
             pool_id: pool.id,
             sender: contract_addr,
-            lower_tick: -(MAX_TICK as i64),
-            upper_tick: MAX_TICK as i64,
+            lower_tick: pool_id.min_valid_tick(&deps.querier).0,
+            upper_tick: pool_id.max_valid_tick(&deps.querier).0
         };
+
 
         // let base_pos = MsgCreatePosition {
         //     pool_id: pool.id,
