@@ -63,6 +63,7 @@ impl PoolId {
         Tick((MAX_TICK/spacing) * spacing)
     }
 
+    // FIXME: This math should be wrong, were using Osmosis tick model.
     pub fn closest_valid_tick(&self, value: i64, querier: &QuerierWrapper) -> Tick {
         let spacing = self.tick_spacing(querier);
         let lower = (value/spacing) * spacing;
@@ -101,6 +102,7 @@ impl VaultParameters {
         querier: &QuerierWrapper
     ) -> Result<Self, ContractError> {
 
+        /* FIXME
         let base_threshold: i64 = params
             .base_threshold
             .try_into()
@@ -110,7 +112,11 @@ impl VaultParameters {
             .pool_id
             .closest_valid_tick(base_threshold, querier)
             .abs();
+        */
+
+        let base_threshold = NonNegTick(params.base_threshold);
         
+        /* FIXME
         let limit_threshold: i64 = params
             .limit_threshold
             .try_into()
@@ -120,6 +126,9 @@ impl VaultParameters {
             .pool_id
             .closest_valid_tick(limit_threshold, querier)
             .abs();
+        */
+
+        let limit_threshold = NonNegTick(params.limit_threshold);
 
         let full_range_weight = Weight::new(params.full_range_weight)
             .ok_or(ContractError::InvalidConfig {})?;

@@ -35,18 +35,7 @@ def osmo_p_inv(p: float):
         # return int(1 - (10**-k - p)/(10**(-6-k)) - k*9e6)
         return int(10**(k+6)*p - k*9e6 - 10**6 - 1)
 
-ps = [
-    0.99, 0.342, 0.0123, 0.008008, 0.000777, 0.000005781
-]
-
-for p in ps:
-    k = dec_zeros(p)
-    print(int(1 - (10**-k - p)/(10**(-6-k)) - k*9e6))
-    print(int(10**(k+6)*p - k*9e6 - 10**6 - 1))
-    # 2 Ticks difference!
-
-
-
+print(osmo_p_inv(10.001))
 
 def plot_prices():
     plt.subplot(1, 2, 1)

@@ -1,6 +1,5 @@
 use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Empty, Env, MessageInfo, Response, StdResult};
 use cw20_base::contract::{execute_mint, query_token_info};
-use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::Pool;
 use std::cmp;
 
 use crate::{
@@ -48,18 +47,11 @@ pub fn execute(
 
 mod exec {
 
-
     use std::str::FromStr;
-
     use cosmwasm_std::{BankMsg, Coin, Uint128};
-    use cw20::TokenInfoResponse;
-    use osmosis_std::types::{cosmos::bank::{self, v1beta1::BankQuerier}, osmosis::concentratedliquidity::v1beta1::{ConcentratedliquidityQuerier, MsgCreatePosition, MsgCreatePositionResponse, PositionByIdRequest, PositionByIdResponse}};
-
-    use crate::{constants::MAX_TICK, msg::DepositMsg, state::VaultInfo};
-
+    use osmosis_std::types::cosmos::bank::v1beta1::BankQuerier;
+    use crate::msg::DepositMsg;
     use super::*;
-
-
 
     // TODO More clarifying errors. TODO Events to query positions (deposits).
     pub fn deposit(
@@ -151,8 +143,8 @@ mod exec {
         // TODO Withdraw current liquidities.
 
         let vault_info = VAULT_INFO.load(deps.storage)?;
-        let vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
-        let pool_id = vault_info.pool_id;
+        let _vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
+        let pool_id = &vault_info.pool_id;
         let pool = pool_id.to_pool(&deps.querier);
         let contract_addr = env.contract.address.to_string();
 
@@ -160,12 +152,12 @@ mod exec {
         let coin0_res = balances.balance(contract_addr.clone(), pool.token0.clone())?;
         let coin1_res = balances.balance(contract_addr.clone(), pool.token1.clone())?;
 
-        let balance0 = if let Some(coin0) = coin0_res.balance {
+        let _balance0 = if let Some(coin0) = coin0_res.balance {
             assert!(coin0.denom == pool.token0);
             Uint128::from_str(&coin0.amount)?
         } else { Uint128::zero() };
 
-        let balance1 = if let Some(coin1) = coin1_res.balance {
+        let _balance1 = if let Some(coin1) = coin1_res.balance {
             assert!(coin1.denom == pool.token1);
             Uint128::from_str(&coin1.amount)?
         } else { Uint128::zero() };
@@ -173,115 +165,13 @@ mod exec {
 
         // Full range position. TODO HOW... Calc liquidities... it should be possible.
 
-        let full_range_pos = MsgCreatePosition {
-            pool_id: pool.id,
-            sender: contract_addr,
-            lower_tick: pool_id.min_valid_tick(&deps.querier).0,
-            upper_tick: pool_id.max_valid_tick(&deps.querier).0
-        };
-
-
-        // let base_pos = MsgCreatePosition {
+        // let full_range_pos = MsgCreatePosition {
         //     pool_id: pool.id,
-        //     sender: env.contract.address.to_string(),
-        //     lower_tick: pool.current_tick - vault_parameters.base_threshold.0.into(),
-        //     upper_tick: pool.current_tick + vault_parameters.base_threshold.0.into(),
-        //     tokens_provided: vec![],
+        //     sender: contract_addr,
+        //     lower_tick: pool_id.min_valid_tick(&deps.querier).0,
+        //     upper_tick: pool_id.max_valid_tick(&deps.querier).0
         // };
         unimplemented!()  
-    }
-
-    pub fn test_swap(env: Env, deps: Deps) -> Result<Response, ContractError> {
-        let querier = ConcentratedliquidityQuerier::new(&deps.querier);
-        // querier.user_positions(address, pool_id, pagination)
-        unimplemented!();
-        /*
-        let sender = env.contract.address.to_string();
-        
-        // Pool id from a testnet tx I did.
-        let osmo_to_atom_pool_id: u64 = 367;
-
-        // Denom I got from the same tx, also from the osmo testnet asset list.
-        let atom_denom = 
-            "ibc/9FF2B7A5F55038A7EE61F4FD6749D9A648B48E89830F2682B67B5DC158E2753C"
-            .to_string();
-
-        // TODO We can call `CalcOutAmtGivenIn` to get our amounts! Or a querier
-        // in general!
-
-        let coin_in = Coin {
-            denom: "uosmo".to_string(),
-            amount: 1000.to_string()
-        };
-
-        let route = SwapAmountInRoute {
-            pool_id: osmo_to_atom_pool_id,
-            token_out_denom: atom_denom
-        };
-
-        let swap_msg = MsgSwapExactAmountIn {
-            sender,
-            routes: vec![route],
-            token_in: Some(coin_in),
-            token_out_min_amount: 69.to_string()
-        };
-
-        Ok(Response::new().add_message(swap_msg))
-        // NOTE BLA BLA
-        // let pool = vault_info.pool_id.to_pool(&deps.querier);
-
-        // let base_pos = MsgCreatePosition {
-        //     pool_id: pool.id,
-        //     sender: info.sender.to_string(),
-        //     lower_tick: pool.current_tick - vault_parameters.base_threshold.0.into(),
-        //     upper_tick: pool.current_tick + vault_parameters.base_threshold.0.into(),
-        //     tokens_provided: vec![],
-        // };
-        */
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use cw_multi_test::{App, ContractWrapper, Executor};
-
-    use crate::{msg::VaultRebalancerInstantiationMsg, state::VaultParametersConfig};
-
-    use super::*;
-
-    // #[test]
-    // fn basic_instantiation() {
-    //     let mut app = App::default();
-    //     let code = ContractWrapper::new(execute, instantiate, query);
-    //     let code_id = app.store_code(Box::new(code));
-
-    //     let owner = app.api().addr_make("owner");
-    //     let _addr = app.instantiate_contract(
-    //         code_id,
-    //         owner.clone(),
-    //         &InstantiateMsg {
-    //             pool: owner.to_string(),
-    //             admin: Some(owner.to_string()),
-    //             config: VaultParametersConfig {},
-    //             rebalancer: VaultRebalancerInstantiationMsg::Admin {}
-    //         },
-    //         &[],
-    //         "my contract",
-    //         None
-    //     ).unwrap();
-    // }
-
-    #[test]
-    fn serialization() {
-        let msg = InstantiateMsg {
-            pool: "pool".to_string(),
-            admin: Some("owner".to_string()),
-            config: VaultParametersConfig {},
-            rebalancer: VaultRebalancerInstantiationMsg::Admin {}
-        };
-
-        let serialized: Binary = to_json_binary(&msg).unwrap();
-        println!("Serialized: {:?}", serialized);
     }
 
 }
