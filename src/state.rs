@@ -2,7 +2,7 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
-    concentratedliquidity::v1beta1::Pool,
+    concentratedliquidity::v1beta1::{FullTick, MsgCreatePosition, Pool, TickInfo},
     poolmanager::v1beta1::PoolmanagerQuerier
 };
 
