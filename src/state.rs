@@ -24,10 +24,15 @@ impl Weight {
 }
 
 #[cw_serde] #[readonly::make]
-pub struct NonNegTick(pub u64);
+pub struct PriceFactor(pub Decimal);
+impl PriceFactor {
+    pub fn new(value: u128) -> Option<Self> {
+        let value = Decimal::new(Uint128::new(value));
+        (value >= Decimal::one()).then_some(Self(value))
+    }
 
-#[cw_serde] #[readonly::make]
-pub struct Tick(pub i64);
+    pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
+}
 
 #[cw_serde] #[readonly::make]
 pub struct PoolId(pub u64);
@@ -50,43 +55,22 @@ impl PoolId {
         // Invariant: Wont overflow under reasonable conditions.
         self.to_pool(querier).tick_spacing as i64
     }
-
-    /// Min possible tick taking into account the pool tick spacing.
-    pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> Tick {
-        let spacing = self.tick_spacing(querier);
-        Tick(((MIN_TICK + spacing + 1)/spacing) * spacing)
-    }
-
-    /// Max possible tick taking into account the pool tick spacing.
-    pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> Tick {
-        let spacing = self.tick_spacing(querier);
-        Tick((MAX_TICK/spacing) * spacing)
-    }
-
-    // FIXME: This math should be wrong, were using Osmosis tick model.
-    pub fn closest_valid_tick(&self, value: i64, querier: &QuerierWrapper) -> Tick {
-        let spacing = self.tick_spacing(querier);
-        let lower = (value/spacing) * spacing;
-        let upper = (value/spacing + 1) * spacing;
-        let closest = min_by_key(lower, upper, |x| (x - value).abs());
-
-        if closest < MIN_TICK { self.min_valid_tick(querier) }
-        else if closest > MAX_TICK { self.max_valid_tick(querier) }
-        else { Tick(closest) }
-    }
-}
-
-impl Tick {
-    fn abs(self) -> NonNegTick { NonNegTick(self.0.unsigned_abs()) }
 }
 
 #[cw_serde]
 pub struct VaultParameters {
-    // Non negative tick values, zero if we want the position to be null.
-    pub base_threshold: NonNegTick,
-    pub limit_threshold: NonNegTick,
+    // Price factor for the base order. Thus, if the current price is `p`,
+    // then the base position will have range `[p/base_factor, p*base_factor]`.
+    pub base_factor: PriceFactor,
+    // Price factor for the limit order. Thus, if the current price is `p`,
+    // then the limit position will have either range `[p/limit_factor, p]` or
+    // `[p, p*limit_factor]`.
+    pub limit_factor: PriceFactor,
     // cosmwasm_std::Decimal weight, zero if we dont want a full range position.
     pub full_range_weight: Weight,
+    // TODO Put this into a separate struct for state. Those parameters above
+    // should always be present after instantiation (INVARIANT).
+    //
     // Position Ids are optional because: 
     // 1. Positions are oly created on rebalances.
     // 2. If any of the params is 0, then the position id for them might be None.
@@ -102,45 +86,23 @@ impl VaultParameters {
         querier: &QuerierWrapper
     ) -> Result<Self, ContractError> {
 
-        /* FIXME
-        let base_threshold: i64 = params
-            .base_threshold
-            .try_into()
-            .unwrap_or(i64::MAX);
-
-        let base_threshold = vault_info
-            .pool_id
-            .closest_valid_tick(base_threshold, querier)
-            .abs();
-        */
-
-        let base_threshold = NonNegTick(params.base_threshold);
+        let base_factor = PriceFactor::new(params.base_factor)
+            .ok_or(ContractError::InvalidConfig {})?;
         
-        /* FIXME
-        let limit_threshold: i64 = params
-            .limit_threshold
-            .try_into()
-            .unwrap_or(i64::MAX);
-
-        let limit_threshold = vault_info
-            .pool_id
-            .closest_valid_tick(limit_threshold, querier)
-            .abs();
-        */
-
-        let limit_threshold = NonNegTick(params.limit_threshold);
+        let limit_factor = PriceFactor::new(params.limit_factor)
+            .ok_or(ContractError::InvalidConfig {})?;
 
         let full_range_weight = Weight::new(params.full_range_weight)
             .ok_or(ContractError::InvalidConfig {})?;
 
-        if base_threshold.0 + limit_threshold.0 == 0 {
+        if base_factor.is_one() && limit_factor.is_one() {
             if full_range_weight.0 != Weight::MAX {
                 return Err(ContractError::InvalidConfig {})
             }
         }
-        
+
         Ok(VaultParameters {
-            base_threshold, limit_threshold, full_range_weight,
+            base_factor, limit_factor, full_range_weight,
             base_position_id: None, limit_position_id: None, full_range_position_id: None
         })
     }

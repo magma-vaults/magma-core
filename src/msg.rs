@@ -2,8 +2,8 @@ use cosmwasm_schema::cw_serde;
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
-    pub base_threshold: u64,
-    pub limit_threshold: u64,
+    pub base_factor: u128,
+    pub limit_factor: u128,
     pub full_range_weight: u128
 }
 
