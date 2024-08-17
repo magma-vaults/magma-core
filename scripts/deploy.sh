@@ -1,8 +1,8 @@
 #!/bin/sh
 WALLET=`osmosisd keys show -a wallet`
 echo "Compiling"
-RUSTFLAGS='-C link-args=-s'
-cargo wasm
+export RUSTFLAGS='-C link-args=-s'
+cargo build --target wasm32-unknown-unknown --release
 
 echo "Deploying from $WALLET"
 TARGET=./target/wasm32-unknown-unknown/release/magma_core.wasm

@@ -48,8 +48,7 @@ pub fn execute(
 mod exec {
 
     use std::str::FromStr;
-    use cosmwasm_std::{BankMsg, Coin, Uint128};
-    use osmosis_std::types::cosmos::bank::v1beta1::BankQuerier;
+    use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::MsgCreatePosition};
     use crate::msg::DepositMsg;
     use super::*;
 
@@ -60,6 +59,7 @@ mod exec {
         env: Env,
         info: MessageInfo
     ) -> Result<Response, ContractError> {
+        use cosmwasm_std::{BankMsg, Coin, Uint128};
         
         let vault_info = VAULT_INFO.load(deps.storage)?;
         let denom0 = vault_info.demon0(&deps.querier);
@@ -137,13 +137,15 @@ mod exec {
     }
 
     pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
+        use cosmwasm_std::Decimal;
+        use osmosis_std::types::cosmos::base::v1beta1::Coin;
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
         // like `minTickMove` or `period`.
 
         // TODO Withdraw current liquidities.
 
         let vault_info = VAULT_INFO.load(deps.storage)?;
-        let _vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
+        let vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
         let pool_id = &vault_info.pool_id;
         let pool = pool_id.to_pool(&deps.querier);
         let contract_addr = env.contract.address.to_string();
@@ -152,15 +154,90 @@ mod exec {
         let coin0_res = balances.balance(contract_addr.clone(), pool.token0.clone())?;
         let coin1_res = balances.balance(contract_addr.clone(), pool.token1.clone())?;
 
-        let _balance0 = if let Some(coin0) = coin0_res.balance {
+        let balance0 = if let Some(coin0) = coin0_res.balance {
             assert!(coin0.denom == pool.token0);
-            Uint128::from_str(&coin0.amount)?
-        } else { Uint128::zero() };
+            // Invariant: We know `coin0_res` holds a valid Decimal as String.
+            Decimal::from_str(&coin0.amount).unwrap()
+        } else { Decimal::zero() };
 
-        let _balance1 = if let Some(coin1) = coin1_res.balance {
+        let balance1 = if let Some(coin1) = coin1_res.balance {
             assert!(coin1.denom == pool.token1);
-            Uint128::from_str(&coin1.amount)?
-        } else { Uint128::zero() };
+            // Invariant: We know `coin0_res` holds a valid Decimal as String.
+            Decimal::from_str(&coin1.amount)?
+        } else { Decimal::zero() };
+
+        let price = pool_id.price(&deps.querier);
+
+        let (balanced_balance0, balanced_balance1) = {
+            // FIXME Those could overflow under extreme conditions, both the
+            // division and the multiplication.
+            let balanced0 = balance0.checked_div(price).unwrap();
+            let balanced1 = balance1.checked_mul(price).unwrap();
+
+            if balanced0 > balance0 { (balance0, balanced1) } 
+            else { (balanced0, balance1) }
+        };
+
+        assert!(balance0 >= balanced_balance0 && balance1 >= balanced_balance1);
+
+        // TODO What if we can only put a limit order? Then the math breaks!
+        let (full_range_balance0, full_range_balance1) = {
+            // TODO Document the math (see [[MagmaLiquidity]]).
+            // FIXME All those unwraps could fail under extreme conditions.
+            let sqrt_k = vault_parameters.base_factor.0.sqrt();
+            let w = vault_parameters.full_range_weight.0;
+            let x = balanced_balance0;
+
+            let numerator = sqrt_k
+                .sqrt()
+                .checked_mul(w)
+                .and_then(|n| n.checked_mul(x))
+                .ok();
+
+            let denominator = sqrt_k
+                .checked_sub(Decimal::one())
+                .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
+                .checked_add(w)
+                .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
+
+            let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
+            let y0 = x0.checked_mul(price).unwrap();
+            (x0, y0)
+        };
+
+        let full_range_tokens = vec![
+            Coin { denom: pool.token0, amount: full_range_balance0.atomics().into() },
+            Coin { denom: pool.token1, amount: full_range_balance1.atomics().into() }
+        ];
+
+        let full_range_position = MsgCreatePosition {
+            pool_id: pool.id,
+            sender: contract_addr,
+            lower_tick: -100, // TODO
+            upper_tick:  100, // TODO
+            tokens_provided: full_range_tokens,
+            token_min_amount0: full_range_balance0.atomics().into(),
+            token_min_amount1: full_range_balance1.atomics().into()
+        };
+
+        // TODO Prove that those unwraps will never fail.
+        let base_range_balance0 = balanced_balance0
+            .checked_sub(full_range_balance0)
+            .unwrap();
+        let base_range_balance1 = balanced_balance1
+            .checked_sub(full_range_balance1)
+            .unwrap();
+
+        let base_range_tokens = vec![
+            Coin { denom: pool.token0, amount: base_range_balance0.atomics().into() },
+            Coin { denom: pool.token1, amount: base_range_balance1.atomics().into() }
+        ]
+
+        let base_range_position = MsgCreatePosition {
+            pool_id: pool.id,  
+            sender: contract_addr,
+            lower_tick: 
+        }
 
 
         // Full range position. TODO HOW... Calc liquidities... it should be possible.

@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, Int128, QuerierWrapper, SignedDecimal, SignedDecimal256, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::{FullTick, MsgCreatePosition, Pool, TickInfo},
@@ -10,15 +10,15 @@ use readonly;
 
 use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
 use crate::constants::MAX_TICK;
-use std::cmp::min_by_key;
+use std::{any::type_name_of_val, cmp::min_by_key, str::FromStr};
 
 #[cw_serde] #[readonly::make]
 pub struct Weight(pub Decimal);
 impl Weight {
     const MAX: Decimal = Decimal::one();
 
-    pub fn new(value: u128) -> Option<Self> {
-        let value = Decimal::new(Uint128::new(value));
+    pub fn new(value: String) -> Option<Self> {
+        let value = Decimal::from_str(&value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
 }
@@ -26,12 +26,59 @@ impl Weight {
 #[cw_serde] #[readonly::make]
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
-    pub fn new(value: u128) -> Option<Self> {
-        let value = Decimal::new(Uint128::new(value));
+    pub fn new(value: String) -> Option<Self> {
+        let value = Decimal::from_str(&value).ok()?;
         (value >= Decimal::one()).then_some(Self(value))
     }
 
     pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
+}
+
+pub fn floorlog10(x: &Decimal) -> i32 {
+    let x: u128 = x.atomics().into();
+    x.ilog10() as i32 - 18
+}
+
+pub fn price_function_inv(p: &Decimal) -> i64 {
+
+    let maybe_neg_pow = |exp: i32| {
+        let ten = SignedDecimal256::new(10.into());
+        if exp >= 0 {
+            // Invariant: We just verified that `exp` is unsigned.
+            let exp: u32 = exp.try_into().unwrap();
+            ten.checked_pow(exp).ok()
+        } else {
+            SignedDecimal256::one().checked_div(ten.pow(exp.unsigned_abs().into())).ok()
+        }
+    };
+
+    let floor_log_p = floorlog10(p);
+    let min_floor_log = -18;
+    let max_floor_log = 20;
+    assert!(min_floor_log <= floor_log_p && floor_log_p <= max_floor_log);
+
+    let x = floor_log_p
+        .checked_mul(9)
+        .unwrap() // Invariant: `9 * max_floor_log < i32::MAX`.
+        .checked_sub(1)
+        .unwrap(); // Invariant: `min_floor_log - 1 > i32::MIN`.
+
+    let x = maybe_neg_pow(floor_log_p)
+        .unwrap() // Invariant: `10^max_floor_log < i256::MAX`.
+        .checked_mul(SignedDecimal256::new(x.into()))
+        .unwrap() // Invariant: `i32::MAX * 10^max_floor_log < i256::MAX`.
+        .checked_add(p.clone().try_into().unwrap())
+        .unwrap(); // Invariant: `u128::MAX + i32::MAX * 10^max_floor_log < i256::MAX`.
+
+    let x = maybe_neg_pow(6 - floor_log_p)
+        .unwrap() // Invariant: `10^(6 - min_floor_log) < i256::MAX`.
+        .checked_mul(x)
+        .unwrap(); // Invariant: `10^(6 - min_floor_log) * u128::MAX + i32::MAX * 10^max_floor_log < i256::MAX`
+
+    // Invariant: price_function_inv image is a subset of i128.
+    let x: Int128 = x.to_int_floor().try_into().unwrap();
+    // Invariant: price_function_inv image is a subset of i64.
+    x.i128().try_into().unwrap()
 }
 
 #[cw_serde] #[readonly::make]
@@ -55,18 +102,29 @@ impl PoolId {
         // Invariant: Wont overflow under reasonable conditions.
         self.to_pool(querier).tick_spacing as i64
     }
+
+    pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
+        Decimal::from_str(&self.to_pool(querier).current_sqrt_price)
+            .unwrap() // Invariant: Pools always hold valid prices as decimals.
+            .checked_pow(2)
+            .unwrap() // Invariant: `sqrt(Decimal::MAX)^2 == Decimal::MAX`
+    }
 }
 
 #[cw_serde]
 pub struct VaultParameters {
     // Price factor for the base order. Thus, if the current price is `p`,
     // then the base position will have range `[p/base_factor, p*base_factor]`.
+    // if `base_factor == PriceFactor(Decimal::one())`, then the vault wont
+    // have a base order.
     pub base_factor: PriceFactor,
     // Price factor for the limit order. Thus, if the current price is `p`,
     // then the limit position will have either range `[p/limit_factor, p]` or
-    // `[p, p*limit_factor]`.
+    // `[p, p*limit_factor]`. If `limit_factor == PriceFactor(Decimal::one())`,
+    // then the vault wont have aa limit order, and will just hold remaining
+    // tokens.
     pub limit_factor: PriceFactor,
-    // cosmwasm_std::Decimal weight, zero if we dont want a full range position.
+    // Decimal weight, zero if we dont want a full range position.
     pub full_range_weight: Weight,
     // TODO Put this into a separate struct for state. Those parameters above
     // should always be present after instantiation (INVARIANT).

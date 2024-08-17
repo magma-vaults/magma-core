@@ -2,9 +2,9 @@ use cosmwasm_schema::cw_serde;
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
-    pub base_factor: u128,
-    pub limit_factor: u128,
-    pub full_range_weight: u128
+    pub base_factor: String, // Decimal value, greater or equal to 1.
+    pub limit_factor: String, // Decimal value, greater or equal to 1.
+    pub full_range_weight: String // Decimal value, in range [0, 1].
 }
 
 #[cw_serde]
