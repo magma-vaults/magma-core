@@ -48,6 +48,7 @@ pub fn execute(
 mod exec {
 
     use std::str::FromStr;
+    use cosmwasm_std::Uint128;
     use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::MsgCreatePosition};
     use crate::msg::DepositMsg;
     use super::*;

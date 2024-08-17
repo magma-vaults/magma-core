@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, Int128, QuerierWrapper, SignedDecimal, SignedDecimal256, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, Int128, OverflowError, QuerierWrapper, SignedDecimal, SignedDecimal256, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::{FullTick, MsgCreatePosition, Pool, TickInfo},
@@ -48,37 +48,28 @@ pub fn price_function_inv(p: &Decimal) -> i64 {
             let exp: u32 = exp.try_into().unwrap();
             ten.checked_pow(exp).ok()
         } else {
-            SignedDecimal256::one().checked_div(ten.pow(exp.unsigned_abs().into())).ok()
+            SignedDecimal256::one()
+                .checked_div(ten.pow(exp.unsigned_abs().into())).ok()
         }
     };
 
-    let floor_log_p = floorlog10(p);
-    let min_floor_log = -18;
-    let max_floor_log = 20;
-    assert!(min_floor_log <= floor_log_p && floor_log_p <= max_floor_log);
+    let compute_price_inverse = || {
+        let floor_log_p = floorlog10(p);
+        let x = floor_log_p.checked_mul(9)?.checked_sub(1)?;
 
-    let x = floor_log_p
-        .checked_mul(9)
-        .unwrap() // Invariant: `9 * max_floor_log < i32::MAX`.
-        .checked_sub(1)
-        .unwrap(); // Invariant: `min_floor_log - 1 > i32::MIN`.
+        let x = maybe_neg_pow(floor_log_p)?
+            .checked_mul(SignedDecimal256::new(x.into())).ok()?
+            .checked_add(p.clone().try_into().ok()?).ok()?;
 
-    let x = maybe_neg_pow(floor_log_p)
-        .unwrap() // Invariant: `10^max_floor_log < i256::MAX`.
-        .checked_mul(SignedDecimal256::new(x.into()))
-        .unwrap() // Invariant: `i32::MAX * 10^max_floor_log < i256::MAX`.
-        .checked_add(p.clone().try_into().unwrap())
-        .unwrap(); // Invariant: `u128::MAX + i32::MAX * 10^max_floor_log < i256::MAX`.
+        let x = maybe_neg_pow(6 - floor_log_p)?.checked_mul(x).ok()?;
 
-    let x = maybe_neg_pow(6 - floor_log_p)
-        .unwrap() // Invariant: `10^(6 - min_floor_log) < i256::MAX`.
-        .checked_mul(x)
-        .unwrap(); // Invariant: `10^(6 - min_floor_log) * u128::MAX + i32::MAX * 10^max_floor_log < i256::MAX`
+        let x: Int128 = x.to_int_floor().try_into().ok()?;
+        x.i128().try_into().ok()
+    };
 
-    // Invariant: price_function_inv image is a subset of i128.
-    let x: Int128 = x.to_int_floor().try_into().unwrap();
-    // Invariant: price_function_inv image is a subset of i64.
-    x.i128().try_into().unwrap()
+    // Invariant: Price function inverse computation doesnt overflow under i256.
+    // Proof: TODO.
+    compute_price_inverse().unwrap()
 }
 
 #[cw_serde] #[readonly::make]
