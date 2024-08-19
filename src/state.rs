@@ -21,17 +21,14 @@ impl Weight {
         let value = Decimal::from_str(&value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
-}
-
-#[cw_serde] #[readonly::make]
-pub struct PriceFactor(pub Decimal);
-impl PriceFactor {
-    pub fn new(value: String) -> Option<Self> {
-        let value = Decimal::from_str(&value).ok()?;
-        (value >= Decimal::one()).then_some(Self(value))
+    
+    pub fn mul_dec(&self, value: &Decimal) -> Decimal {
+        // Invariant: A weight product wont ever overflow.
+        value.checked_mul(self.0).unwrap()
     }
 
-    pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
+    pub fn is_zero(&self) -> bool { self.0 == Decimal::zero() }
+
 }
 
 #[cw_serde] #[readonly::make]
@@ -54,7 +51,8 @@ impl PositiveDecimal {
     }
 }
 
-pub fn price_function_inv(p: &Decimal) -> i64 {
+// TODO Check proof for output type `i32`, not `i64`.
+pub fn price_function_inv(p: &Decimal) -> i32 {
 
     let maybe_neg_pow = |exp: i32| {
         let ten = SignedDecimal256::new(10.into());
@@ -111,8 +109,30 @@ impl PoolId {
         self.to_pool(querier).tick_spacing as i64
     }
 
-    pub fn closest_valid_tick(&self, querier: &QuerierWrapper, tick: i64) -> i64 {
-        
+    /// Min possible tick taking into account the pool tick spacing.
+    pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i64 {
+        let spacing = self.tick_spacing(querier);
+        // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
+        ((MIN_TICK + spacing + 1)/spacing) * spacing
+    }
+
+    /// Max possible tick taking into account the pool tick spacing.
+    pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i64 {
+        let spacing = self.tick_spacing(querier);
+        (MAX_TICK/spacing) * spacing
+    }
+
+    pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i64 {
+        let value: i64 = value.into();
+        let spacing = self.tick_spacing(querier);
+        let lower = (value/spacing) * spacing;
+        // Invariant: Wont overflow because `i32::MAX <<< i64::MAX`
+        let upper = (value/spacing + 1) * spacing;
+        let closest = min_by_key(lower, upper, |x| (x - value).abs());
+
+        if closest < MIN_TICK { self.min_valid_tick(querier) }
+        else if closest > MAX_TICK { self.max_valid_tick(querier) }
+        else { closest }
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
@@ -128,6 +148,26 @@ impl PoolId {
         Decimal::from_str(&p).unwrap()
     }
 }
+
+#[cw_serde] #[readonly::make]
+pub struct PriceFactor(pub Decimal);
+impl PriceFactor {
+    pub fn new(value: String) -> Option<Self> {
+        let value = Decimal::from_str(&value).ok()?;
+        (value >= Decimal::one()).then_some(Self(value))
+    }
+
+    pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
+
+    pub fn mul_or_max(&self, price: &Decimal) -> Decimal {
+         
+    }
+}
+
+pub fn raw<T: From<Uint128>>(d: &Decimal) -> T { d.atomics().into()  }
+
+
+
 
 #[cw_serde]
 pub struct VaultParameters {

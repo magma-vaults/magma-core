@@ -47,10 +47,11 @@ pub fn execute(
 
 mod exec {
 
+    use core::num;
     use std::str::FromStr;
     use cosmwasm_std::Uint128;
     use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::MsgCreatePosition};
-    use crate::msg::DepositMsg;
+    use crate::{msg::DepositMsg, state::{price_function_inv, raw, Weight}};
     use super::*;
 
     // TODO More clarifying errors. TODO Events to query positions (deposits).
@@ -181,76 +182,100 @@ mod exec {
 
         assert!(balance0 >= balanced_balance0 && balance1 >= balanced_balance1);
 
-        // TODO What if we can only put a limit order? Then the math breaks!
-        let (full_range_balance0, full_range_balance1) = {
-            // TODO Document the math (see [[MagmaLiquidity]]).
-            // FIXME All those unwraps could fail under extreme conditions.
-            let sqrt_k = vault_parameters.base_factor.0.sqrt();
-            let w = vault_parameters.full_range_weight.0;
-            let x = balanced_balance0;
+        let VaultParameters { 
+            base_factor, limit_factor, full_range_weight, .. 
+        } = vault_parameters;
+        // We take 1% slippage.
+        let slippage = Weight::new("0.99".to_string()).unwrap();
 
-            let numerator = sqrt_k
-                .sqrt()
-                .checked_mul(w)
-                .and_then(|n| n.checked_mul(x))
-                .ok();
+        // TODO Fix business logic.
+        if !full_range_weight.is_zero() {
+            // TODO What if we can only put a limit order? Then the math breaks!
+            let (full_range_balance0, full_range_balance1) = {
+                // TODO Document the math (see [[MagmaLiquidity]]).
+                // FIXME All those unwraps could fail under extreme conditions.
+                let sqrt_k = base_factor.0.sqrt();
 
-            let denominator = sqrt_k
-                .checked_sub(Decimal::one())
-                .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
-                .checked_add(w)
-                .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
+                let numerator = full_range_weight
+                    .mul_dec(&sqrt_k.sqrt())
+                    .checked_mul(balanced_balance0)
+                    .ok();
 
-            let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
-            let y0 = x0.checked_mul(price).unwrap();
-            (x0, y0)
-        };
+                let denominator = sqrt_k
+                    .checked_sub(Decimal::one())
+                    .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
+                    .checked_add(full_range_weight.0)
+                    .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
 
-        let full_range_tokens = vec![
-            Coin { denom: pool.token0.clone(), amount: full_range_balance0.atomics().into() },
-            Coin { denom: pool.token1.clone(), amount: full_range_balance1.atomics().into() }
-        ];
+                let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
+                let y0 = x0.checked_mul(price).unwrap();
+                (x0, y0)
+            };
 
-        let full_range_position = MsgCreatePosition {
-            pool_id: pool.id,
-            sender: contract_addr,
-            lower_tick: -100, // TODO
-            upper_tick:  100, // TODO
-            tokens_provided: full_range_tokens,
-            token_min_amount0: full_range_balance0.atomics().into(),
-            token_min_amount1: full_range_balance1.atomics().into()
-        };
+            let full_range_tokens = vec![
+                Coin { denom: pool.token0.clone(), amount: raw(&full_range_balance0) },
+                Coin { denom: pool.token1.clone(), amount: raw(&full_range_balance1) }
+            ];
 
-        // TODO Prove that those unwraps will never fail.
-        let base_range_balance0 = balanced_balance0
-            .checked_sub(full_range_balance0)
-            .unwrap();
-        let base_range_balance1 = balanced_balance1
-            .checked_sub(full_range_balance1)
-            .unwrap();
-
-        let base_range_tokens = vec![
-            Coin { denom: pool.token0, amount: base_range_balance0.atomics().into() },
-            Coin { denom: pool.token1, amount: base_range_balance1.atomics().into() }
-        ];
-
-        /* TODO
-        let base_range_position = MsgCreatePosition {
-            pool_id: pool.id,  
-            sender: contract_addr,
-            lower_tick: 
+            let full_range_position = MsgCreatePosition {
+                pool_id: pool.id,
+                sender: contract_addr.clone(),
+                lower_tick: pool_id.min_valid_tick(&deps.querier),
+                upper_tick:  pool_id.max_valid_tick(&deps.querier),
+                tokens_provided: full_range_tokens,
+                token_min_amount0: raw(&slippage.mul_dec(&full_range_balance0)),
+                token_min_amount1: raw(&slippage.mul_dec(&full_range_balance1))
+            };
         }
-        */
+
+        let base_factor = vault_parameters.base_factor;
+
+        if !base_factor.is_one() {
+
+            // TODO Prove that those unwraps will never fail.
+            let base_range_balance0 = balanced_balance0
+                .checked_sub(full_range_balance0)
+                .unwrap();
+            let base_range_balance1 = balanced_balance1
+                .checked_sub(full_range_balance1)
+                .unwrap();
+
+            let base_range_tokens = vec![
+                Coin { denom: pool.token0, amount: raw(&base_range_balance0) },
+                Coin { denom: pool.token1, amount: raw(&base_range_balance1) }
+            ];
 
 
-        // Full range position. TODO HOW... Calc liquidities... it should be possible.
+            let current_price = pool_id.price(&deps.querier);
+            let lower_price = base_factor.0
+                .checked_div(current_price)
+                .unwrap_or(Decimal::MIN);
 
-        // let full_range_pos = MsgCreatePosition {
-        //     pool_id: pool.id,
-        //     sender: contract_addr,
-        //     lower_tick: pool_id.min_valid_tick(&deps.querier).0,
-        //     upper_tick: pool_id.max_valid_tick(&deps.querier).0
-        // };
+            let upper_price = base_factor.0
+                .checked_mul(current_price)
+                .unwrap_or(Decimal::MAX);
+
+            let lower_tick = pool_id.closest_valid_tick(
+                price_function_inv(&lower_price), &deps.querier
+            );
+
+            let upper_tick = pool_id.closest_valid_tick(
+                price_function_inv(&upper_price), &deps.querier
+            );
+                
+            let _base_range_position = MsgCreatePosition {
+                pool_id: pool.id,  
+                sender: contract_addr,
+                lower_tick,
+                upper_tick,
+                tokens_provided: base_range_tokens,
+                token_min_amount0: raw(&slippage.mul_dec(&base_range_balance0)),
+                token_min_amount1: raw(&slippage.mul_dec(&base_range_balance1))
+            };
+        }
+
+
+
         unimplemented!()  
     }
 }
