@@ -34,9 +34,24 @@ impl PriceFactor {
     pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
 }
 
-pub fn floorlog10(x: &Decimal) -> i32 {
-    let x: u128 = x.atomics().into();
-    x.ilog10() as i32 - 18
+#[cw_serde] #[readonly::make]
+pub struct PositiveDecimal(pub Decimal);
+impl PositiveDecimal {
+    pub fn new(value: &Decimal) -> Option<Self> {
+        (value != Decimal::zero()).then_some(Self(value.clone()))
+    }
+
+    pub fn floorlog10(&self) -> i32 {
+        let x: u128 = self.0.atomics().into();
+        // Invariant: `u128::ilog10(u128::MAX)` fits in `i32`.
+        let x: i32 = x.ilog10().try_into().unwrap();
+        // Invariant: `ilog10(1) - 18 = 0 - 18` fits in `i32`.
+        let x = x.checked_sub(18).unwrap();
+        // Invariant: `floor(log10(u128::MAX)) - 18 =  20` and
+        //            `floor(log10(1))         - 18 = -18`
+        assert!(-18 <= x && x <= 20);
+        x
+    }
 }
 
 pub fn price_function_inv(p: &Decimal) -> i64 {
@@ -48,28 +63,30 @@ pub fn price_function_inv(p: &Decimal) -> i64 {
             let exp: u32 = exp.try_into().unwrap();
             ten.checked_pow(exp).ok()
         } else {
-            SignedDecimal256::one()
-                .checked_div(ten.pow(exp.unsigned_abs().into())).ok()
+            SignedDecimal256::one().checked_div(
+                ten.checked_pow(exp.unsigned_abs().into()).ok()?
+            ).ok()
         }
     };
 
-    let compute_price_inverse = || {
-        let floor_log_p = floorlog10(p);
+    let compute_price_inverse = |p| {
+        let floor_log_p = PositiveDecimal::new(p)?.floorlog10();
         let x = floor_log_p.checked_mul(9)?.checked_sub(1)?;
 
         let x = maybe_neg_pow(floor_log_p)?
             .checked_mul(SignedDecimal256::new(x.into())).ok()?
             .checked_add(p.clone().try_into().ok()?).ok()?;
 
-        let x = maybe_neg_pow(6 - floor_log_p)?.checked_mul(x).ok()?;
+        let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
+            .checked_mul(x).ok()?;
 
         let x: Int128 = x.to_int_floor().try_into().ok()?;
         x.i128().try_into().ok()
     };
 
     // Invariant: Price function inverse computation doesnt overflow under i256.
-    // Proof: TODO.
-    compute_price_inverse().unwrap()
+    //     Proof: See whitepaper theorem 5.
+    compute_price_inverse(p).unwrap()
 }
 
 #[cw_serde] #[readonly::make]
@@ -94,11 +111,21 @@ impl PoolId {
         self.to_pool(querier).tick_spacing as i64
     }
 
+    pub fn closest_valid_tick(&self, querier: &QuerierWrapper, tick: i64) -> i64 {
+        
+    }
+
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
-        Decimal::from_str(&self.to_pool(querier).current_sqrt_price)
-            .unwrap() // Invariant: Pools always hold valid prices as decimals.
-            .checked_pow(2)
-            .unwrap() // Invariant: `sqrt(Decimal::MAX)^2 == Decimal::MAX`
+        let pool = self.to_pool(querier);
+        let querier = PoolmanagerQuerier::new(querier);
+        let p = querier
+            .spot_price(pool.id, pool.token0, pool.token1)
+            .unwrap() // Invariant: We already verified the params are proper.
+            .spot_price;
+
+        // Invariant: We know that `querier.spot_price(...)`
+        //            returns valid `Decimal` prices.
+        Decimal::from_str(&p).unwrap()
     }
 }
 

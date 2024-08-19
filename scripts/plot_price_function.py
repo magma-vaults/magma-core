@@ -28,6 +28,11 @@ def osmo_p_inv(p: float) -> int | None:
     z = floor(log10(p))
     return round(10**(6-z)*(p + (9*z - 1)*10**z))
 
+price_increment = 10**-6
+print(osmo_p_inv(1))
+print(osmo_p_inv(1 + price_increment/2))
+print(osmo_p_inv(1 + price_increment))
+
 osmo_p_inv_test_cases = {
     0.099998 :-9000200,
     0.099999 :-9000100,

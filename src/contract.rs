@@ -207,8 +207,8 @@ mod exec {
         };
 
         let full_range_tokens = vec![
-            Coin { denom: pool.token0, amount: full_range_balance0.atomics().into() },
-            Coin { denom: pool.token1, amount: full_range_balance1.atomics().into() }
+            Coin { denom: pool.token0.clone(), amount: full_range_balance0.atomics().into() },
+            Coin { denom: pool.token1.clone(), amount: full_range_balance1.atomics().into() }
         ];
 
         let full_range_position = MsgCreatePosition {
@@ -232,13 +232,15 @@ mod exec {
         let base_range_tokens = vec![
             Coin { denom: pool.token0, amount: base_range_balance0.atomics().into() },
             Coin { denom: pool.token1, amount: base_range_balance1.atomics().into() }
-        ]
+        ];
 
+        /* TODO
         let base_range_position = MsgCreatePosition {
             pool_id: pool.id,  
             sender: contract_addr,
             lower_tick: 
         }
+        */
 
 
         // Full range position. TODO HOW... Calc liquidities... it should be possible.
@@ -251,5 +253,24 @@ mod exec {
         // };
         unimplemented!()  
     }
+}
 
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use cosmwasm_std::Decimal256;
+
+    #[test]
+    fn decimal_type_test() {
+        let target_price = "1.300904508667263332308471677698306399".to_string();
+
+        Decimal256::from_atomics(atomics, decimal_places)
+        let d = Decimal256::from_str(&target_price)
+            .unwrap() // Invariant: Pools always hold valid prices as decimals.
+            .checked_pow(2)
+            .unwrap(); // Invariant: `sqrt(Decimal::MAX)^2 == Decimal::MAX`
+        
+        println!("{}", d);
+    }
 }
