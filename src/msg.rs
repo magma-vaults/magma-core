@@ -35,10 +35,10 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub struct DepositMsg {
-    pub amount0: u128,
-    pub amount1: u128,
-    pub amount0_min: u128,
-    pub amount1_min: u128,
+    pub amount0: String, // Decimal compatible value.
+    pub amount1: String, // Decimal compatible value.
+    pub amount0_min: String, // Decimal compatible value.
+    pub amount1_min: String, // Decimal compatible value.
     pub to: String
 }
 

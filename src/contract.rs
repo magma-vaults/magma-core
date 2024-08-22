@@ -74,8 +74,12 @@ mod exec {
 
         let denom0 = vault_info.demon0(&deps.querier);
         let denom1 = vault_info.demon1(&deps.querier);
-        let amount0 = Uint128::from(amount0);
-        let amount1 = Uint128::from(amount1);
+
+        // TODO: Handle better decimal conversion errors.
+        let amount0 = Decimal::from_str(&amount0)?.atomics();
+        let amount1 = Decimal::from_str(&amount1)?.atomics();
+        let amount0_min = Decimal::from_str(&amount0_min)?.atomics();
+        let amount1_min = Decimal::from_str(&amount1_min)?.atomics();
 
         let expected_amounts = vec![
             Coin {denom: denom0.clone(), amount: amount0},
@@ -325,41 +329,43 @@ mod exec {
         assert!(balance0 >= balanced_balance0 && balance1 >= balanced_balance1);
 
         let VaultParameters { 
-            base_factor, limit_factor, full_range_weight, .. 
+            base_factor, limit_factor, full_range_weight
         } = vault_parameters;
+
         // We take 1% slippage.
         let slippage = Weight::new("0.99".to_string()).unwrap();
+
+        let (full_range_balance0, full_range_balance1) = {
+            // TODO Document the math (see [[MagmaLiquidity]]).
+            // FIXME All those unwraps could fail under extreme conditions.
+            let sqrt_k = base_factor.0.sqrt();
+
+            let numerator = full_range_weight
+                .mul_dec(&sqrt_k.sqrt())
+                .checked_mul(balanced_balance0)
+                .ok();
+
+            let denominator = sqrt_k
+                .checked_sub(Decimal::one())
+                .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
+                .checked_add(full_range_weight.0)
+                .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
+
+            let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
+            let y0 = x0.checked_mul(price).unwrap();
+            (x0, y0)
+        };
 
         // TODO Fix business logic.
         if !full_range_weight.is_zero() {
             // TODO What if we can only put a limit order? Then the math breaks!
-            let (full_range_balance0, full_range_balance1) = {
-                // TODO Document the math (see [[MagmaLiquidity]]).
-                // FIXME All those unwraps could fail under extreme conditions.
-                let sqrt_k = base_factor.0.sqrt();
-
-                let numerator = full_range_weight
-                    .mul_dec(&sqrt_k.sqrt())
-                    .checked_mul(balanced_balance0)
-                    .ok();
-
-                let denominator = sqrt_k
-                    .checked_sub(Decimal::one())
-                    .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
-                    .checked_add(full_range_weight.0)
-                    .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
-
-                let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
-                let y0 = x0.checked_mul(price).unwrap();
-                (x0, y0)
-            };
 
             let full_range_tokens = vec![
                 Coin { denom: pool.token0.clone(), amount: raw(&full_range_balance0) },
                 Coin { denom: pool.token1.clone(), amount: raw(&full_range_balance1) }
             ];
 
-            let full_range_position = MsgCreatePosition {
+            let _full_range_position = MsgCreatePosition {
                 pool_id: pool.id,
                 sender: contract_addr.clone(),
                 lower_tick: pool_id.min_valid_tick(&deps.querier),
@@ -369,8 +375,6 @@ mod exec {
                 token_min_amount1: raw(&slippage.mul_dec(&full_range_balance1))
             };
         }
-
-        let base_factor = vault_parameters.base_factor;
 
         if !base_factor.is_one() {
 
@@ -416,28 +420,11 @@ mod exec {
             };
         }
 
+        if !limit_factor.is_one() {
+            // TODO
+        }
 
-
-        unimplemented!()  
+        unimplemented!()
     }
 }
 
-#[cfg(test)]
-mod test {
-    use std::str::FromStr;
-
-    use cosmwasm_std::Decimal256;
-
-    #[test]
-    fn decimal_type_test() {
-        let target_price = "1.300904508667263332308471677698306399".to_string();
-
-        Decimal256::from_atomics(atomics, decimal_places)
-        let d = Decimal256::from_str(&target_price)
-            .unwrap() // Invariant: Pools always hold valid prices as decimals.
-            .checked_pow(2)
-            .unwrap(); // Invariant: `sqrt(Decimal::MAX)^2 == Decimal::MAX`
-        
-        println!("{}", d);
-    }
-}
