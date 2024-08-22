@@ -88,35 +88,93 @@ mod exec {
             return Err(ContractError::InvalidDeposit {})
         }
 
-        // TODO Whats `MINIMUM_LIQUIDITY`?
+        // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent
+        // weird divisions by 0.
         let (new_shares, amount0_used, amount1_used) = {
             let total_supply = query_token_info(deps.as_ref())?.total_supply;
 
             // TODO Calc position amounts. Absolute! What if someone else 
             // deposists to that position outside of the vault?
-            let total0: Uint128 = Uint128::zero();
-            let total1: Uint128 = Uint128::zero();
+            let (total0, total1) = {
+                (Uint128::zero(), Uint128::zero())
+            };
 
+            // TODO Formalize CharmFi shares calculation model.
             if total_supply.is_zero() {
+                // Invariant: If there are no shares, then there shouldnt be
+                //            any vault tokens for that shares.
+                assert!(total0.is_zero() && total1.is_zero());
+
                 (cmp::max(amount0, amount1), amount0, amount1)
             } else if total0.is_zero() {
-                // TODO Why? Research first rebalance impact on totals.
-                ((amount0 * total_supply)/total0, Uint128::zero(), amount1)
+                // Invariant: If there are shares and there are no tokens
+                //            denom0 in the vault, then the shares must
+                //            be for the token denom1.
+                assert!(!total1.is_zero());
+
+                // TODO Prove computation security.
+                let shares = amount1
+                    .checked_mul(total_supply)
+                    .unwrap()
+                    .checked_div(total1)
+                    .unwrap();
+
+                (shares, Uint128::zero(), amount1)
             } else if total1.is_zero() {
-                // TODO Why? Research first rebalance impact on totals.
-                ((amount1 * total_supply)/total1, amount0, Uint128::zero())
+                // Invariant: If there are shares and there are no tokens
+                //            denom1 in the vault, then the shares must
+                //            be for the token denom0.
+                assert!(!total0.is_zero());
+
+                // TODO Prove computation security.
+                let shares = amount0
+                    .checked_mul(total_supply)
+                    .unwrap()
+                    .checked_div(total0)
+                    .unwrap();
+
+                (shares, amount0, Uint128::zero())
             } else {
-                // TODO Why? Research first rebalance impact on totals.
-                let cross = cmp::min(amount0 * total0, amount1 * total1);
+                // TODO: Prove computation security.
+                let cross = cmp::min(
+                    amount0.checked_mul(total0).unwrap(),
+                    amount1.checked_mul(total1).unwrap()
+                );
+                // TODO: Is this an invariant or a requirement?
                 assert!(cross > Uint128::zero());
 
-                let amount0_used = (cross - Uint128::one())/total1 + Uint128::one();
-                let amount1_used = (cross - Uint128::one())/total0 + Uint128::one();
-                ((cross * total_supply)/(total0 * total1), amount0_used, amount1_used)
+                let amount0_used = cross
+                    .checked_sub(Uint128::one())
+                    .unwrap() // Invariant: We already verified `cross > 0`.
+                    .checked_div(total1)
+                    .unwrap() // TODO: Prove computation security.
+                    .checked_add(Uint128::one())
+                    .unwrap(); // TODO: Prove computation security.
+
+                let amount1_used = cross
+                    .checked_sub(Uint128::one())
+                    .unwrap() // Invariant: We already verified `cross > 0`.
+                    .checked_div(total0)
+                    .unwrap() // TODO: Prove computation security.
+                    .checked_add(Uint128::one())
+                    .unwrap(); // TODO: Prove computation security.
+
+                // TODO: Prove computation security.
+                let shares = cross
+                    .checked_mul(total_supply)
+                    .unwrap()
+                    .checked_div(total0)
+                    .unwrap()
+                    .checked_div(total1)
+                    .unwrap();
+
+                (shares, amount0_used, amount1_used)
             }
         };
 
+        // TODO: Document invariants.
         assert!(amount0_used <= amount0 && amount1_used <= amount1);
+        assert!(!new_shares.is_zero());
 
         let refunded_amounts = vec![
             Coin {denom: denom0, amount: amount0 - amount0_used},
@@ -124,10 +182,6 @@ mod exec {
         ];
 
         if amount0 < amount0_min.into() || amount1 < amount1_min.into() {
-            return Err(ContractError::InvalidDeposit {})
-        }
-
-        if new_shares.is_zero() {
             return Err(ContractError::InvalidDeposit {})
         }
 
