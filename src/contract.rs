@@ -4,7 +4,7 @@ use std::cmp;
 
 use crate::{
     error::ContractError, msg::{ExecuteMsg, InstantiateMsg}, state::{
-        VaultInfo, VaultParameters, VAULT_INFO, VAULT_PARAMETERS
+        VaultInfo, VaultParameters, VaultState, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE
     }
 };
 
@@ -17,10 +17,16 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
 
     let vault_info = VaultInfo::new(msg.vault_info, deps.as_ref())?;
-    VAULT_INFO.save(deps.storage, &vault_info)?;
+    // Invaraint: `VaultInfo` serialization should never fail.
+    VAULT_INFO.save(deps.storage, &vault_info).unwrap();
 
-    let vault_parameters = VaultParameters::new(msg.vault_parameters, vault_info, &deps.querier)?;
-    VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
+    let vault_parameters = VaultParameters::new(msg.vault_parameters)?;
+    // Invariant: `VaultParameters` serialization should never fail.
+    VAULT_PARAMETERS.save(deps.storage, &vault_parameters).unwrap();
+
+    let vault_state = VaultState::new();
+    // Invariant: `VaultState` serialization should never fail.
+    VAULT_STATE.save(deps.storage, &vault_state).unwrap();
 
     Ok(Response::new())
 }
@@ -49,8 +55,8 @@ mod exec {
 
     use core::num;
     use std::str::FromStr;
-    use cosmwasm_std::Uint128;
-    use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::MsgCreatePosition};
+    use cosmwasm_std::{Decimal, Uint128};
+    use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::{ConcentratedliquidityQuerier, MsgCreatePosition}};
     use crate::{msg::DepositMsg, state::{price_function_inv, raw, Weight}};
     use super::*;
 
@@ -63,7 +69,9 @@ mod exec {
     ) -> Result<Response, ContractError> {
         use cosmwasm_std::{BankMsg, Coin, Uint128};
         
-        let vault_info = VAULT_INFO.load(deps.storage)?;
+        // Invariant: `VAULT_INFO` should always be present after instantiation.
+        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+
         let denom0 = vault_info.demon0(&deps.querier);
         let denom1 = vault_info.demon1(&deps.querier);
         let amount0 = Uint128::from(amount0);
@@ -96,7 +104,87 @@ mod exec {
             // TODO Calc position amounts. Absolute! What if someone else 
             // deposists to that position outside of the vault?
             let (total0, total1) = {
-                (Uint128::zero(), Uint128::zero())
+                // Invariant: `VAULT_STATE` should always be present after instantiation.
+                let VaultState {
+                    full_range_position_id,
+                    base_position_id,
+                    limit_position_id
+                } = VAULT_STATE.load(deps.storage).unwrap();
+
+                let position_querier = ConcentratedliquidityQuerier::new(&deps.querier);
+                let mut total0 = Decimal::zero();
+                let mut total1 = Decimal::zero();
+
+                if let Some(full_range_id) = full_range_position_id {
+                    // Invariant: We know that `full_range_id`, if present,
+                    //            refers to a valid CL position.
+                    let pos = position_querier.position_by_id(full_range_id)
+                        .unwrap().position.unwrap();
+
+                    // TODO: Prove computation security. 
+                    //       Why wouldnt asset0 and asset1 be present?
+                    let full_range_amount0 = Decimal::from_str(
+                        &pos.asset0.unwrap().amount
+                    ).unwrap();
+
+                    let full_range_amount1 = Decimal::from_str(
+                        &pos.asset1.unwrap().amount
+                    ).unwrap();
+
+                    // TODO: Prove computation security.
+                    total0 = total0.checked_add(full_range_amount0).unwrap();
+                    total1 = total1.checked_add(full_range_amount1).unwrap();
+                }
+                
+                if let Some(base_id) = base_position_id {
+                    // Invariant: We know that `base_id`, if present,
+                    //            refers to a valid CL position.
+                    let pos = position_querier.position_by_id(base_id)
+                        .unwrap().position.unwrap();
+
+                    // TODO: Prove computation security. 
+                    //       Why wouldnt asset0 and asset1 be present?
+                    let base_pos_amount0 = Decimal::from_str(
+                        &pos.asset0.unwrap().amount
+                    ).unwrap();
+
+                    let base_pos_amount1 = Decimal::from_str(
+                        &pos.asset1.unwrap().amount
+                    ).unwrap();
+
+                    // TODO: Prove computation security.
+                    total0 = total0.checked_add(base_pos_amount0).unwrap();
+                    total1 = total1.checked_add(base_pos_amount1).unwrap();
+                }
+
+                if let Some(limit_id) = limit_position_id {
+                    // Invariant: We know that `limit_id`, if present,
+                    //            refers to a valid CL position.
+                    let pos = position_querier.position_by_id(limit_id)
+                        .unwrap().position.unwrap();
+
+                    // TODO: Prove computation security. 
+                    //       Why wouldnt asset0 and asset1 be present?
+                    let limit_pos_amount0 = Decimal::from_str(
+                        &pos.asset0.unwrap().amount
+                    ).unwrap();
+
+                    let limit_pos_amount1 = Decimal::from_str(
+                        &pos.asset1.unwrap().amount
+                    ).unwrap();
+
+                    // TODO: Prove computation security.
+                    total0 = total0.checked_add(limit_pos_amount0).unwrap();
+                    total1 = total1.checked_add(limit_pos_amount1).unwrap();
+                }
+                
+                if true {
+                    // TODO: Compute fee amounts.
+                    total0 += Decimal::zero();
+                    total1 += Decimal::zero();
+                }
+
+                (total0.atomics(), total1.atomics())
             };
 
             // TODO Formalize CharmFi shares calculation model.

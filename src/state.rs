@@ -159,8 +159,9 @@ impl PriceFactor {
 
     pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
 
+    // What even was this?
     pub fn mul_or_max(&self, price: &Decimal) -> Decimal {
-         
+        unimplemented!() 
     }
 }
 
@@ -184,22 +185,11 @@ pub struct VaultParameters {
     pub limit_factor: PriceFactor,
     // Decimal weight, zero if we dont want a full range position.
     pub full_range_weight: Weight,
-    // TODO Put this into a separate struct for state. Those parameters above
-    // should always be present after instantiation (INVARIANT).
-    //
-    // Position Ids are optional because: 
-    // 1. Positions are oly created on rebalances.
-    // 2. If any of the params is 0, then the position id for them might be None.
-    pub base_position_id: Option<u64>,
-    pub limit_position_id: Option<u64>,
-    pub full_range_position_id: Option<u64>
 }
 
 impl VaultParameters {
     pub fn new(
         params: VaultParametersInstantiateMsg,
-        vault_info: VaultInfo,
-        querier: &QuerierWrapper
     ) -> Result<Self, ContractError> {
 
         let base_factor = PriceFactor::new(params.base_factor)
@@ -218,8 +208,7 @@ impl VaultParameters {
         }
 
         Ok(VaultParameters {
-            base_factor, limit_factor, full_range_weight,
-            base_position_id: None, limit_position_id: None, full_range_position_id: None
+            base_factor, limit_factor, full_range_weight
         })
     }
 }
@@ -292,7 +281,39 @@ impl VaultRebalancer {
     }
 }
 
+#[cw_serde]
+pub struct VaultState {
+    // Position Ids are optional because: 
+    // 1. Positions are only created on rebalances.
+    // 2. If any of the vault positions is null, then those should 
+    //    be `None`, see `VaultParameters`.
+    pub full_range_position_id: Option<u64>,
+    pub base_position_id: Option<u64>,
+    pub limit_position_id: Option<u64>
+}
+
+impl VaultState {
+    pub fn new() -> Self {
+        Self {
+            full_range_position_id: None,
+            base_position_id: None,
+            limit_position_id: None
+        }
+    }
+}
+
+/// VAULT_INFO Holds non-mathematical generally immutable information 
+/// about the vault. Its generally immutable as in it can only be
+/// changed by the vault admin, but its state cant be changed with
+/// any business logic.
 pub const VAULT_INFO: Item<VaultInfo> = Item::new("vault_info");
+
+/// VAULT_PARAMETERS Holds mathematical generally immutable information 
+/// about the vault. Its generally immutable as in it can only be
+/// changed by the vault admin, but its state cant be changed with
+/// any business logic.
 pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters");
 
-
+/// VAULT_STATE Holds any vault state that can and will be changed
+/// with contract business logic.
+pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
