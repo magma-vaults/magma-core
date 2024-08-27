@@ -46,3 +46,6 @@ DATE=`date +%s` # Current unix timestamp
 git add .
 git commit -m "generated contract types update at $DATE"
 git push origin main
+
+cd ..
+rm -rd magma-front

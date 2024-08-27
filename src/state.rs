@@ -3,7 +3,7 @@ use cosmwasm_std::{Addr, Decimal, Deps, Int128, OverflowError, QuerierWrapper, S
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::{FullTick, MsgCreatePosition, Pool, TickInfo},
-    poolmanager::v1beta1::PoolmanagerQuerier
+    poolmanager::v1beta1::{PoolmanagerQuerier, SpotPriceRequest}
 };
 
 use readonly;
@@ -137,8 +137,7 @@ impl PoolId {
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
         let pool = self.to_pool(querier);
-        let querier = PoolmanagerQuerier::new(querier);
-        let p = querier
+        let p = PoolmanagerQuerier::new(querier)
             .spot_price(pool.id, pool.token0, pool.token1)
             .unwrap() // Invariant: We already verified the params are proper.
             .spot_price;

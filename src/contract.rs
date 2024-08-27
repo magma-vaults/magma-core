@@ -54,11 +54,18 @@ pub fn execute(
 mod exec {
 
     use core::num;
-    use std::str::FromStr;
+    use std::{io::empty, str::FromStr};
     use cosmwasm_std::{Decimal, Uint128};
-    use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::{ConcentratedliquidityQuerier, MsgCreatePosition}};
+    use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::{ConcentratedliquidityQuerier, FullPositionBreakdown, MsgCreatePosition, PositionByIdRequest}};
     use crate::{msg::DepositMsg, state::{price_function_inv, raw, Weight}};
     use super::*;
+
+    /// Returns the amounts of all positions with fees.
+    /// TODO: Also take into account holded balances that havent been used yet.
+    fn vault_amounts() {
+        unimplemented!()
+    }
+
 
     // TODO More clarifying errors. TODO Events to query positions (deposits).
     pub fn deposit(
@@ -115,78 +122,75 @@ mod exec {
                     limit_position_id
                 } = VAULT_STATE.load(deps.storage).unwrap();
 
-                let position_querier = ConcentratedliquidityQuerier::new(&deps.querier);
-                let mut total0 = Decimal::zero();
-                let mut total1 = Decimal::zero();
+                let pos_id_to_balances = |id| if let Some(id) = id {
+                    use osmosis_std::types::cosmos::base::v1beta1::Coin;
 
-                if let Some(full_range_id) = full_range_position_id {
-                    // Invariant: We know that `full_range_id`, if present,
-                    //            refers to a valid CL position.
-                    let pos = position_querier.position_by_id(full_range_id)
-                        .unwrap().position.unwrap();
+                    let pos = PositionByIdRequest { position_id: id }
+                        .query(&deps.querier).ok()?.position?;
 
-                    // TODO: Prove computation security. 
-                    //       Why wouldnt asset0 and asset1 be present?
-                    let full_range_amount0 = Decimal::from_str(
-                        &pos.asset0.unwrap().amount
-                    ).unwrap();
+                    if let FullPositionBreakdown {
+                        asset0: Some(Coin { denom: denom0, amount: amount0 }),
+                        asset1: Some(Coin { denom: denom1, amount: amount1 }),
+                        claimable_spread_rewards: rewards,
+                        ..
+                    } = pos {
 
-                    let full_range_amount1 = Decimal::from_str(
-                        &pos.asset1.unwrap().amount
-                    ).unwrap();
+                        let rewards0 = rewards.iter()
+                            .find(|x| x.denom == denom0)
+                            .map(|x| Uint128::from_str(&x.amount))
+                            .unwrap_or(Ok(Uint128::zero())).ok()?;
 
-                    // TODO: Prove computation security.
-                    total0 = total0.checked_add(full_range_amount0).unwrap();
-                    total1 = total1.checked_add(full_range_amount1).unwrap();
-                }
+                        let rewards1 = rewards.iter()
+                            .find(|x| x.denom == denom1)
+                            .map(|x| Uint128::from_str(&x.amount))
+                            .unwrap_or(Ok(Uint128::zero())).ok()?;
+
+
+                        let amount0 = Uint128::from_str(&amount0).ok()?.checked_add(rewards0).ok()?;
+                        let amount1 = Uint128::from_str(&amount1).ok()?.checked_add(rewards1).ok()?;
+                        Some((amount0, amount1))
+                    } else { 
+                        /* Invariant: */ unreachable!() 
+                        // Proof: If `id` does not refer to a valid position id, we already
+                        //        returned `None` at the query at the beggining of the closure.
+                        //        Otherwise, any valid position will hold `asset0`, `asset1`,
+                        //        and `claimable_spread_rewards` (even if its `vec![]`).
+                    }
+                } else { Some((Uint128::zero(), Uint128::zero())) };
+
+                let compute_all_balances = || -> Option<(Decimal, Decimal)> {
+                    // Invariant: None of those calls will return `None`. If the position
+                    //            ids are none, then `pos_id_to_balances` returns a default
+                    //            value, and if not, the function can only fail if the position
+                    //            ids do not refer to valid positions, but because our position
+                    //            ids are in the state, we already verified theyre valid.
+                    let full_range_balances = pos_id_to_balances(full_range_position_id)?; 
+                    let base_balances = pos_id_to_balances(base_position_id)?; 
+                    let limit_balances = pos_id_to_balances(limit_position_id)?; 
+
+                    // Invariant: None of those additions will return `None`. Balances could
+                    //            only overflow outside `Decimal::MAX` if the tokens they 
+                    //            refer itself had a max supply above `Decimal::MAX`, but thats
+                    //            not possible.
+                    let balance0 = full_range_balances.0
+                        .checked_add(base_balances.0).ok()?
+                        .checked_add(limit_balances.0).ok()?;
+
+                    let balance1 = full_range_balances.1
+                        .checked_add(base_balances.1).ok()?
+                        .checked_add(limit_balances.1).ok()?;
+
+                    Some((balance0, balance1))
+                };
+
+                // Invariant: Wont overflow. Proof: See `compute_all_balances` closure.
+                let (total0, total1) = compute_all_balances().unwrap();
                 
-                if let Some(base_id) = base_position_id {
-                    // Invariant: We know that `base_id`, if present,
-                    //            refers to a valid CL position.
-                    let pos = position_querier.position_by_id(base_id)
-                        .unwrap().position.unwrap();
-
-                    // TODO: Prove computation security. 
-                    //       Why wouldnt asset0 and asset1 be present?
-                    let base_pos_amount0 = Decimal::from_str(
-                        &pos.asset0.unwrap().amount
-                    ).unwrap();
-
-                    let base_pos_amount1 = Decimal::from_str(
-                        &pos.asset1.unwrap().amount
-                    ).unwrap();
-
-                    // TODO: Prove computation security.
-                    total0 = total0.checked_add(base_pos_amount0).unwrap();
-                    total1 = total1.checked_add(base_pos_amount1).unwrap();
-                }
-
-                if let Some(limit_id) = limit_position_id {
-                    // Invariant: We know that `limit_id`, if present,
-                    //            refers to a valid CL position.
-                    let pos = position_querier.position_by_id(limit_id)
-                        .unwrap().position.unwrap();
-
-                    // TODO: Prove computation security. 
-                    //       Why wouldnt asset0 and asset1 be present?
-                    let limit_pos_amount0 = Decimal::from_str(
-                        &pos.asset0.unwrap().amount
-                    ).unwrap();
-
-                    let limit_pos_amount1 = Decimal::from_str(
-                        &pos.asset1.unwrap().amount
-                    ).unwrap();
-
-                    // TODO: Prove computation security.
-                    total0 = total0.checked_add(limit_pos_amount0).unwrap();
-                    total1 = total1.checked_add(limit_pos_amount1).unwrap();
-                }
-                
-                if true {
-                    // TODO: Compute fee amounts.
-                    total0 += Decimal::zero();
-                    total1 += Decimal::zero();
-                }
+                // if true {
+                //     // TODO: Compute fee amounts.
+                //     total0 += Decimal::zero();
+                //     total1 += Decimal::zero();
+                // }
 
                 (total0.atomics(), total1.atomics())
             };
