@@ -55,7 +55,7 @@ mod exec {
 
     use core::num;
     use std::{io::empty, str::FromStr};
-    use cosmwasm_std::{Decimal, Uint128};
+    use cosmwasm_std::{Decimal, Uint128, Uint256};
     use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::{ConcentratedliquidityQuerier, FullPositionBreakdown, MsgCreatePosition, PositionByIdRequest}};
     use crate::{msg::DepositMsg, state::{price_function_inv, raw, Weight}};
     use super::*;
@@ -88,6 +88,7 @@ mod exec {
         let amount0_min = Decimal::from_str(&amount0_min)?.atomics();
         let amount1_min = Decimal::from_str(&amount1_min)?.atomics();
 
+
         let expected_amounts = vec![
             Coin {denom: denom0.clone(), amount: amount0},
             Coin {denom: denom1.clone(), amount: amount1}
@@ -112,8 +113,7 @@ mod exec {
         let (new_shares, amount0_used, amount1_used) = {
             let total_supply = query_token_info(deps.as_ref())?.total_supply;
 
-            // TODO Calc position amounts. Absolute! What if someone else 
-            // deposists to that position outside of the vault?
+            // TODO: Test if its possible to manipulate balances by depositing tokens raw to the vault.
             let (total0, total1) = {
                 // Invariant: `VAULT_STATE` should always be present after instantiation.
                 let VaultState {
@@ -135,6 +135,8 @@ mod exec {
                         ..
                     } = pos {
 
+                        // Invariant: Will never return `None`, because if an amount is
+                        //            present, it always is a valid `Uint128`.
                         let rewards0 = rewards.iter()
                             .find(|x| x.denom == denom0)
                             .map(|x| Uint128::from_str(&x.amount))
@@ -146,6 +148,11 @@ mod exec {
                             .unwrap_or(Ok(Uint128::zero())).ok()?;
 
 
+                        // Invariant: Will never return `None`, because if the position has
+                        //            amounts `amount0` and `amount1`, we know theyre valid
+                        //            `Uint128`. Neither will the addition overflow, because
+                        //            balances could only overflow if the tokens they refer
+                        //            had supplies above `Uint128::MAX`, but thats not possible.
                         let amount0 = Uint128::from_str(&amount0).ok()?.checked_add(rewards0).ok()?;
                         let amount1 = Uint128::from_str(&amount1).ok()?.checked_add(rewards1).ok()?;
                         Some((amount0, amount1))
@@ -158,42 +165,123 @@ mod exec {
                     }
                 } else { Some((Uint128::zero(), Uint128::zero())) };
 
-                let compute_all_balances = || -> Option<(Decimal, Decimal)> {
+                let compute_all_balances = || {
                     // Invariant: None of those calls will return `None`. If the position
                     //            ids are none, then `pos_id_to_balances` returns a default
                     //            value, and if not, the function can only fail if the position
                     //            ids do not refer to valid positions, but because our position
-                    //            ids are in the state, we already verified theyre valid.
+                    //            ids are in the state, we already verified theyre proper.
                     let full_range_balances = pos_id_to_balances(full_range_position_id)?; 
                     let base_balances = pos_id_to_balances(base_position_id)?; 
-                    let limit_balances = pos_id_to_balances(limit_position_id)?; 
+                    let limit_balances = pos_id_to_balances(limit_position_id)?;
+                    
+                    let contract_balances = {
+                        let balances = BankQuerier::new(&deps.querier);
+                        let contract_addr = env.contract.address.to_string();
 
-                    // Invariant: None of those additions will return `None`. Balances could
-                    //            only overflow outside `Decimal::MAX` if the tokens they 
-                    //            refer itself had a max supply above `Decimal::MAX`, but thats
-                    //            not possible.
+                        // Invariant: Will never return `None` because we know all args are valid.
+                        let contract_balance0 = balances
+                            .balance(contract_addr.clone(), denom0.clone())
+                            .ok()?.balance?.amount;
+
+                        let contract_balance1 = balances
+                            .balance(contract_addr, denom1.clone())
+                            .ok()?.balance?.amount;
+
+                        // Invariant: Will never return `None` because we know `amount`s are
+                        //            properly formated.
+                        (
+                            Uint128::from_str(&contract_balance0).ok()?,
+                            Uint128::from_str(&contract_balance1).ok()?
+                        )
+                    };
+
+                    // Invariant: None of those additions will return `None`. Balances 
+                    //            could only overflow if the tokens they refer had
+                    //            supplies above `Uint128::MAX`, but thats not possible.
                     let balance0 = full_range_balances.0
                         .checked_add(base_balances.0).ok()?
-                        .checked_add(limit_balances.0).ok()?;
+                        .checked_add(limit_balances.0).ok()?
+                        .checked_add(contract_balances.0).ok()?;
 
                     let balance1 = full_range_balances.1
                         .checked_add(base_balances.1).ok()?
-                        .checked_add(limit_balances.1).ok()?;
+                        .checked_add(limit_balances.1).ok()?
+                        .checked_add(contract_balances.1).ok()?;
 
                     Some((balance0, balance1))
                 };
 
-                // Invariant: Wont overflow. Proof: See `compute_all_balances` closure.
-                let (total0, total1) = compute_all_balances().unwrap();
-                
-                // if true {
-                //     // TODO: Compute fee amounts.
-                //     total0 += Decimal::zero();
-                //     total1 += Decimal::zero();
-                // }
-
-                (total0.atomics(), total1.atomics())
+                // Invariant: Will never return `None`. 
+                // Proof: See `compute_all_balances` closure.
+                compute_all_balances().unwrap()
             };
+
+            let compute_shares_and_amounts = || if total_supply.is_zero() {
+                // Invariant: If there are no shares, then there shouldnt be
+                //            any vault tokens for that shares.
+                assert!(total0.is_zero() && total1.is_zero());
+
+                Some((cmp::max(amount0, amount1), amount0, amount1))
+            } else if total0.is_zero() {
+                // Invariant: If there are shares and there are no tokens
+                //            denom0 in the vault, then the shares must
+                //            be for the token denom1.
+                assert!(!total1.is_zero());
+
+                let shares = Into::<Uint256>::into(amount1)
+                    .checked_mul(total_supply.into()).ok()?
+                    .checked_div(total1.into()).ok()?;
+
+                Some((shares.try_into().ok()?, Uint128::zero(), amount1))
+            } else if total1.is_zero() {
+                // Invariant: If there are shares and there are no tokens
+                //            denom1 in the vault, then the shares must
+                //            be for the token denom0.
+                assert!(!total0.is_zero());
+
+                let shares = Into::<Uint256>::into(amount0)
+                    .checked_mul(total_supply.into()).ok()?
+                    .checked_div(total0.into()).ok()?;
+
+                Some((shares.try_into().ok()?, amount0.try_into().ok()?, Uint128::zero()))
+            } else {
+                let cross = cmp::min(
+                    amount0.checked_mul(total0).ok()?,
+                    amount1.checked_mul(total1).ok()?
+                );
+                // TODO: Is this an invariant or a requirement?
+                assert!(cross > Uint128::zero());
+
+                let amount0_used = cross
+                    .checked_sub(Uint128::one())
+                    .unwrap() // Invariant: We already verified `cross > 0`.
+                    .checked_div(total1)
+                    .unwrap() // TODO: Prove computation security.
+                    .checked_add(Uint128::one())
+                    .unwrap(); // TODO: Prove computation security.
+
+                let amount1_used = cross
+                    .checked_sub(Uint128::one())
+                    .unwrap() // Invariant: We already verified `cross > 0`.
+                    .checked_div(total0)
+                    .unwrap() // TODO: Prove computation security.
+                    .checked_add(Uint128::one())
+                    .unwrap(); // TODO: Prove computation security.
+
+                // TODO: Prove computation security.
+                let shares = cross
+                    .checked_mul(total_supply)
+                    .unwrap()
+                    .checked_div(total0)
+                    .unwrap()
+                    .checked_div(total1)
+                    .unwrap();
+
+                Some((shares, amount0_used, amount1_used))
+            };
+
+            compute_shares_and_amounts().unwrap();
 
             // TODO Formalize CharmFi shares calculation model.
             if total_supply.is_zero() {
@@ -209,27 +297,30 @@ mod exec {
                 assert!(!total1.is_zero());
 
                 // TODO Prove computation security.
-                let shares = amount1
-                    .checked_mul(total_supply)
-                    .unwrap()
-                    .checked_div(total1)
-                    .unwrap();
+                let shares = Into::<Uint256>::into(amount1)
+                    .checked_mul(total_supply.into())
+                    .unwrap() // Invariant: Wont overflow because we lifted to `Uint256`.
+                    .checked_div(total1.into())
+                    .unwrap(); // Invariant: We just verified `total1` is not 0.
 
-                (shares, Uint128::zero(), amount1)
+                // Invaraint: Wont overflow because if `total_supply` is high, then so
+                //            is `total1`.
+                (shares.try_into().unwrap(), Uint128::zero(), amount1)
             } else if total1.is_zero() {
                 // Invariant: If there are shares and there are no tokens
                 //            denom1 in the vault, then the shares must
                 //            be for the token denom0.
                 assert!(!total0.is_zero());
 
-                // TODO Prove computation security.
-                let shares = amount0
-                    .checked_mul(total_supply)
-                    .unwrap()
-                    .checked_div(total0)
-                    .unwrap();
+                let shares = Into::<Uint256>::into(amount0)
+                    .checked_mul(total_supply.into())
+                    .unwrap() // Invariant: Wont overflow because we lifted to `Uint256`.
+                    .checked_div(total0.into())
+                    .unwrap(); // Invariant: We just verified `total0` is not 0.
 
-                (shares, amount0, Uint128::zero())
+                // Invaraint: Wont overflow because if `total_supply` is high, then so
+                //            is `total0`.
+                (shares.try_into().unwrap(), amount0.try_into().unwrap(), Uint128::zero())
             } else {
                 // TODO: Prove computation security.
                 let cross = cmp::min(

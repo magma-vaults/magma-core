@@ -23,3 +23,11 @@ pub enum ContractError {
     #[error("Invalid pool_id: {0}")]
     InvalidPoolId(u64),
 }
+
+#[derive(Error, Debug, PartialEq)]
+enum ExampleError0 {
+    #[error("error 0 happened")]
+    Inner 
+}
+
+
