@@ -146,6 +146,18 @@ impl PoolId {
         //            returns valid `Decimal` prices.
         Decimal::from_str(&p).unwrap()
     }
+
+    pub fn denom0(&self, querier: &QuerierWrapper) -> String {
+        self.to_pool(querier).token0
+    }
+
+    pub fn denom1(&self, querier: &QuerierWrapper) -> String {
+        self.to_pool(querier).token1
+    }
+
+    pub fn denoms(&self, querier: &QuerierWrapper) -> (String, String) {
+        (self.denom0(querier), self.denom1(querier))
+    }
 }
 
 #[cw_serde] #[readonly::make]
@@ -215,8 +227,6 @@ impl VaultParameters {
 #[cw_serde] #[readonly::make]
 pub struct VaultInfo {
     #[readonly] pub pool_id: PoolId,
-    #[readonly] pub vault_name: String,
-    #[readonly] pub vault_symbol: String,
     pub admin: Option<Addr>,
     pub rebalancer: VaultRebalancer,
 }
@@ -239,10 +249,7 @@ impl VaultInfo {
             }?
         };
 
-        Ok(VaultInfo {
-            pool_id, rebalancer, admin,
-            vault_name: info.vault_name, vault_symbol: info.vault_symbol
-        })
+        Ok(VaultInfo { pool_id, rebalancer, admin })
     }
 
     pub fn demon0(&self, querier: &QuerierWrapper) -> String {

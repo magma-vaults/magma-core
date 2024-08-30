@@ -1,4 +1,5 @@
-use cosmwasm_schema::cw_serde;
+use cosmwasm_schema::{cw_serde, QueryResponses};
+use cosmwasm_std::{Coin, Uint128};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -47,4 +48,61 @@ pub enum ExecuteMsg {
     Deposit(DepositMsg),
     Rebalance {}
 }
+
+#[cw_serde]
+#[derive(QueryResponses)]
+pub enum QueryMsg {
+    #[returns(VaultBalancesResponse)]
+    VaultBalances {},
+    #[returns(PositionBalancesWithFeesResponse)]
+    PositionBalancesWithFees { position_type: PositionType }
+}
+
+#[cw_serde]
+pub enum PositionType { FullRange, Base, Limit }
+
+#[cw_serde]
+pub struct CoinsPair(pub Coin, pub Coin);
+
+impl CoinsPair {
+    pub fn new(
+        denom0: String, amount0: Uint128,
+        denom1: String, amount1: Uint128
+    ) -> Self {
+        Self(
+            Coin { denom: denom0, amount: amount0 },
+            Coin { denom: denom1, amount: amount1 }
+        )
+    }
+
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+
+        // Invariant: Balances addition will never overflow because
+        //            for that Coins supply would have to be larger
+        //            than `Uint128::MAX`, but thats not possible.
+        (self.0.denom == other.0.denom && self.1.denom == other.1.denom).then_some(
+            CoinsPair(
+                Coin {
+                    denom: self.0.denom,
+                    amount: self.0.amount.checked_add(other.0.amount).unwrap(),
+                },
+                Coin {
+                    denom: self.1.denom,
+                    amount: self.1.amount.checked_add(other.1.amount).unwrap(),
+                }
+            )
+        )
+    }
+}
+
+#[cw_serde]
+pub struct VaultBalancesResponse {
+    pub res: CoinsPair 
+}
+
+#[cw_serde]
+pub struct PositionBalancesWithFeesResponse {
+    pub res: CoinsPair
+}
+
 
