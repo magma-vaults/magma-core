@@ -1,5 +1,5 @@
 
-use cosmwasm_std::StdError;
+use cosmwasm_std::{Coin, StdError};
 use cw_utils::PaymentError;
 use thiserror::Error;
  
@@ -11,15 +11,13 @@ pub enum ContractError {
     #[error("cw20 error: {0}")]
     Cw20(#[from] cw20_base::ContractError),
 
-    // #[error("Invalid contract config")]
-    // InvalidConfig {},
-
     #[error("Payment error: {0}")]
     Payment(#[from] PaymentError),
 
-    #[error("Invalid deposit")]
-    InvalidDeposit {},
+    // #[error("Invalid deposit")]
+    // InvalidDeposit {},
 
+    // Instantiation errors.
     #[error("Invalid concentrated liquidity pool_id {0}")]
     InvalidPoolId(u64),
 
@@ -36,7 +34,27 @@ pub enum ContractError {
     InvalidPriceFactor(String),
 
     #[error("Weights are String Decimals in the range [0, 1], got: {0}")]
-    InvalidWeight(String)
+    InvalidWeight(String),
+
+    // Deposit errors.
+    #[error("Invalid non Uint128 coin amount: {0}")]
+    NonUint128CoinAmount(String),
+
+    #[error("Improper balances: expected {expected} but got {got}")]
+    ImproperSentAmounts { expected: String, got: String },
+
+    #[error("Nothing to deposit, user sent 0 tokens")]
+    ZeroTokensSent {},
+
+    #[error("Cant mint vault shares to itself ({0})")]
+    ImproperSharesOwner(String),
+
+    #[error("Used amounts below min wanted amounts: used: {used}, wanted: {wanted}")]
+    DepositedAmontsBelowMin { used: String, wanted: String },
+
+    #[error("Invalid shareholder address: {0}")]
+    InvalidShareholderAddress(String)
+
 
 }
 

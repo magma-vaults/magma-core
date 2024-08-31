@@ -1,6 +1,6 @@
-use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128};
+use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, coins};
 use cw20_base::contract::execute_mint;
-use cw20_base::state::{TokenInfo, TOKEN_INFO};
+use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use std::cmp;
 
 use crate::msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, QueryMsg, VaultBalancesResponse};
@@ -13,7 +13,7 @@ use crate::{
 #[entry_point]
 pub fn instantiate(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     _info: MessageInfo,
     msg: InstantiateMsg
 ) -> Result<Response, ContractError> {
@@ -36,7 +36,7 @@ pub fn instantiate(
         symbol: msg.vault_info.vault_symbol,
         decimals: 18,
         total_supply: Uint128::zero(),
-        mint: None
+        mint: Some(MinterData { minter: env.contract.address, cap: None })
     };
     // Invariant: `TokenInfo` serialization should never fail.
     TOKEN_INFO.save(deps.storage, &token_info).unwrap();
@@ -54,7 +54,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         PositionBalancesWithFees { position_type } => 
             Ok(to_json_binary(&query::position_balances_with_fees(position_type, deps))?),
         CalcSharesAndUsableAmounts { for_amount0, for_amount1 } => {
-            Ok(to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, deps, &env))?)
+            Ok(to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, false, deps, &env))?)
         }
     }
 }
@@ -176,6 +176,7 @@ mod query {
     pub fn calc_shares_and_usable_amounts(
         input_amount0: Uint128,
         input_amount1: Uint128,
+        amounts_already_in_contract: bool,
         deps: Deps,
         env: &Env
     ) -> CalcSharesAndUsableAmountsResponse {
@@ -184,6 +185,11 @@ mod query {
             bal0: total0,
             bal1: total1
         } = query::vault_balances(deps, env);
+
+        let (total0, total1) = if amounts_already_in_contract {(
+            total0.checked_sub(input_amount0).unwrap(),
+            total1.checked_sub(input_amount1).unwrap()
+        )} else {(total0, total1)};
 
         // Invariant: `TOKEN_INFO` always present after instantiation.
         let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
@@ -316,67 +322,94 @@ mod exec {
         
         // Invariant: `VAULT_INFO` should always be present after instantiation.
         let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+        let contract_addr = env.contract.address.clone();
 
         let denom0 = vault_info.demon0(&deps.querier);
         let denom1 = vault_info.demon1(&deps.querier);
 
-        // TODO: Handle better decimal conversion errors.
-        let amount0 = Uint128::from_str(&amount0)?;
-        let amount1 = Uint128::from_str(&amount1)?;
-        let amount0_min = Uint128::from_str(&amount0_min)?;
-        let amount1_min = Uint128::from_str(&amount1_min)?;
+        // TODO: Handle better Errors: something like `use errors::DepositErrors::*`.
+        let amount0 = Uint128::from_str(&amount0).map_err(|_| ContractError::NonUint128CoinAmount(amount0))?;
+        let amount1 = Uint128::from_str(&amount1).map_err(|_| ContractError::NonUint128CoinAmount(amount1))?;
+        let amount0_min = Uint128::from_str(&amount0_min).map_err(|_| ContractError::NonUint128CoinAmount(amount0_min))?;
+        let amount1_min = Uint128::from_str(&amount1_min).map_err(|_| ContractError::NonUint128CoinAmount(amount1_min))?;
 
-        let expected_amounts = vec![
-            Coin {denom: denom0.clone(), amount: amount0},
-            Coin {denom: denom1.clone(), amount: amount1}
-        ];
-
-        if expected_amounts != info.funds {
-            return Err(ContractError::InvalidDeposit {})
+        if amount0.is_zero() && amount1.is_zero() && info.funds.is_empty() {
+            return Err(ContractError::ZeroTokensSent {})
         }
 
-        if amount0.is_zero() && amount1.is_zero() {
-            return Err(ContractError::InvalidDeposit {})
+        let amount0_got = info.funds.iter()
+            .find(|x| x.denom == denom0)
+            .map(|x| x.amount)
+            .unwrap_or(Uint128::zero());
+
+        let amount1_got = info.funds.iter()
+            .find(|x| x.denom == denom1)
+            .map(|x| x.amount)
+            .unwrap_or(Uint128::zero());
+
+        if amount0_got != amount0 || amount1_got != amount1 {
+            return Err(ContractError::ImproperSentAmounts { 
+                expected: format!( "({}, {})", amount0, amount1),
+                got: format!("({}, {})", amount0_got, amount1_got)
+            })
         }
 
-        let new_holder = deps.api.addr_validate(&to)?;
+        let new_holder = deps.api.addr_validate(&to)
+            .map_err(|_| ContractError::InvalidShareholderAddress(to))?;
 
-        if new_holder == env.contract.address {
-            return Err(ContractError::InvalidDeposit {})
+        if new_holder == contract_addr {
+            return Err(ContractError::ImproperSharesOwner(new_holder.into()))
         }
 
         let CalcSharesAndUsableAmountsResponse {
             shares, 
-            usable_amount0: amount_used0,
-            usable_amount1: amount_used1
-        } = query::calc_shares_and_usable_amounts(amount0, amount1, deps.as_ref(), &env);
+            usable_amount0: amount0_used,
+            usable_amount1: amount1_used
+        } = query::calc_shares_and_usable_amounts(amount0, amount1, true, deps.as_ref(), &env);
 
-        if shares.is_zero() {
-            return Err(ContractError::InvalidDeposit {})
-        }
 
         // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
 
-        // TODO: Document this invariant. ITS NOT a requirement, even if it looks like.
-        assert!(amount_used0 <= amount0 && amount_used1 <= amount1);
+        // TODO: Document those invariants. THEYRE NOT requirements, even if it looks like i itt.
+        assert!(amount0_used <= amount0 && amount1_used <= amount1);
+        assert!(!shares.is_zero());
 
-        let refunded_amounts = vec![
-            Coin {denom: denom0, amount: amount0 - amount_used0},
-            Coin {denom: denom1, amount: amount1 - amount_used1}
-        ];
-
-        if amount0 < amount0_min || amount1 < amount1_min {
-            return Err(ContractError::InvalidDeposit {})
+        if amount0_used < amount0_min || amount1_used < amount1_min {
+            return Err(ContractError::DepositedAmontsBelowMin { 
+                used: format!("({}, {})", amount0_used, amount1_used),
+                wanted: format!("({}, {})", amount0_min, amount1_min)
+            })
         }
 
-        // Invariant: We already verified the holder, same with the shares.
-        execute_mint(deps, env, info.clone(), new_holder.to_string(), shares)
-            .unwrap();
+        {
+            let mut info = info.clone();
+            info.sender = contract_addr;
 
-        Ok(Response::new().add_message(BankMsg::Send { 
-            to_address: info.sender.to_string(),
-            amount: refunded_amounts 
-        }))
+            // Invariant: The only allowed minter is this contract itself.
+            execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap();
+        }
+        
+        // TODO Clean this procedure. Is the problem zero amounts? Cant I send 2 amounts at the
+        // same time? maybe by filtering the original vec I had?
+        let res = Response::new();
+
+        let res = if amount0_used < amount0 {
+            // Invariant: We just verified the subtraction wont overflow.
+            res.add_message(BankMsg::Send { 
+                to_address: info.sender.to_string(), 
+                amount: coins(amount0.checked_sub(amount0_used).unwrap().into(), denom0)
+            })
+        } else { res };
+
+        let res = if amount1_used < amount1 {
+            // Invariant: We just verified the subtraction wont overflow.
+            res.add_message(BankMsg::Send { 
+                to_address: info.sender.to_string(), 
+                amount: coins(amount1.checked_sub(amount1_used).unwrap().into(), denom1)
+            })
+        } else { res };
+
+        Ok(res)
     }
 
     // TODO I havent even really started cleaning the hard pad did I?
