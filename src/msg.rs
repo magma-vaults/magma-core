@@ -1,5 +1,5 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::{Coin, Uint128};
+use cosmwasm_std::Uint128;
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -36,11 +36,11 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub struct DepositMsg {
-    pub amount0: String, // Decimal compatible value.
-    pub amount1: String, // Decimal compatible value.
-    pub amount0_min: String, // Decimal compatible value.
-    pub amount1_min: String, // Decimal compatible value.
-    pub to: String
+    pub amount0: String, // Uint128 value.
+    pub amount1: String, // Uint128 value.
+    pub amount0_min: String, // Uint128 value.
+    pub amount1_min: String, // Uint128 value.
+    pub to: String // Addr value.
 }
 
 #[cw_serde]
@@ -55,54 +55,30 @@ pub enum QueryMsg {
     #[returns(VaultBalancesResponse)]
     VaultBalances {},
     #[returns(PositionBalancesWithFeesResponse)]
-    PositionBalancesWithFees { position_type: PositionType }
+    PositionBalancesWithFees { position_type: PositionType },
+    #[returns(CalcSharesAndUsableAmountsResponse)]
+    CalcSharesAndUsableAmounts { for_amount0: Uint128, for_amount1: Uint128 } // TODO Will work?
 }
 
 #[cw_serde]
 pub enum PositionType { FullRange, Base, Limit }
 
 #[cw_serde]
-pub struct CoinsPair(pub Coin, pub Coin);
-
-impl CoinsPair {
-    pub fn new(
-        denom0: String, amount0: Uint128,
-        denom1: String, amount1: Uint128
-    ) -> Self {
-        Self(
-            Coin { denom: denom0, amount: amount0 },
-            Coin { denom: denom1, amount: amount1 }
-        )
-    }
-
-    pub fn checked_add(self, other: Self) -> Option<Self> {
-
-        // Invariant: Balances addition will never overflow because
-        //            for that Coins supply would have to be larger
-        //            than `Uint128::MAX`, but thats not possible.
-        (self.0.denom == other.0.denom && self.1.denom == other.1.denom).then_some(
-            CoinsPair(
-                Coin {
-                    denom: self.0.denom,
-                    amount: self.0.amount.checked_add(other.0.amount).unwrap(),
-                },
-                Coin {
-                    denom: self.1.denom,
-                    amount: self.1.amount.checked_add(other.1.amount).unwrap(),
-                }
-            )
-        )
-    }
-}
-
-#[cw_serde]
 pub struct VaultBalancesResponse {
-    pub res: CoinsPair 
+    pub bal0: Uint128,
+    pub bal1: Uint128
 }
 
 #[cw_serde]
 pub struct PositionBalancesWithFeesResponse {
-    pub res: CoinsPair
+    pub bal0: Uint128,
+    pub bal1: Uint128
 }
 
+#[cw_serde]
+pub struct CalcSharesAndUsableAmountsResponse {
+    pub shares: Uint128,
+    pub usable_amount0: Uint128,
+    pub usable_amount1: Uint128
+}
 
