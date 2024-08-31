@@ -48,4 +48,4 @@ git commit -m "generated contract types update at $DATE"
 git push origin main
 
 cd ..
-rm -rd magma-front
+rm -rf magma-front

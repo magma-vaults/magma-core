@@ -18,6 +18,7 @@ pub fn instantiate(
     msg: InstantiateMsg
 ) -> Result<Response, ContractError> {
 
+    // TODO Better Error types!!!!
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     // Invaraint: `VaultInfo` serialization should never fail.
     VAULT_INFO.save(deps.storage, &vault_info).unwrap();
@@ -188,7 +189,7 @@ mod query {
         let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
 
         if total_supply.is_zero() {
-            assert!(input_amount0.is_zero() && input_amount1.is_zero());
+            assert!(total0.is_zero() && total1.is_zero());
 
             CalcSharesAndUsableAmountsResponse {
                 shares: (cmp::max(input_amount0, input_amount1)),
@@ -428,7 +429,7 @@ mod exec {
         } = vault_parameters;
 
         // We take 1% slippage.
-        let slippage = Weight::new("0.99".to_string()).unwrap();
+        let slippage = Weight::new(&"0.99".into()).unwrap();
 
         let (full_range_balance0, full_range_balance1) = {
             // TODO Document the math (see [[MagmaLiquidity]]).

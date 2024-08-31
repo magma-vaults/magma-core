@@ -17,7 +17,7 @@ pub struct Weight(pub Decimal);
 impl Weight {
     const MAX: Decimal = Decimal::one();
 
-    pub fn new(value: String) -> Option<Self> {
+    pub fn new(value: &String) -> Option<Self> {
         let value = Decimal::from_str(&value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
@@ -163,7 +163,7 @@ impl PoolId {
 #[cw_serde] #[readonly::make]
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
-    pub fn new(value: String) -> Option<Self> {
+    pub fn new(value: &String) -> Option<Self> {
         let value = Decimal::from_str(&value).ok()?;
         (value >= Decimal::one()).then_some(Self(value))
     }
@@ -203,18 +203,20 @@ impl VaultParameters {
         params: VaultParametersInstantiateMsg,
     ) -> Result<Self, ContractError> {
 
-        let base_factor = PriceFactor::new(params.base_factor)
-            .ok_or(ContractError::InvalidConfig {})?;
+        let base_factor = PriceFactor::new(&params.base_factor)
+            .ok_or(ContractError::InvalidPriceFactor(params.base_factor))?;
         
-        let limit_factor = PriceFactor::new(params.limit_factor)
-            .ok_or(ContractError::InvalidConfig {})?;
+        let limit_factor = PriceFactor::new(&params.limit_factor)
+            .ok_or(ContractError::InvalidPriceFactor(params.limit_factor))?;
 
-        let full_range_weight = Weight::new(params.full_range_weight)
-            .ok_or(ContractError::InvalidConfig {})?;
+        let full_range_weight = Weight::new(&params.full_range_weight)
+            .ok_or(ContractError::InvalidWeight(params.full_range_weight))?;
 
         if base_factor.is_one() && limit_factor.is_one() {
             if full_range_weight.0 != Weight::MAX {
-                return Err(ContractError::InvalidConfig {})
+                return Err(ContractError::ContradictoryConfig { 
+                    reason: "Both price factor are 1, thus the full range weight should also be 1".into()
+                })
             }
         }
 
@@ -234,18 +236,21 @@ pub struct VaultInfo {
 impl VaultInfo {
     pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, ContractError> {
         let pool_id = PoolId::new(info.pool_id, &deps.querier)
-            .ok_or(ContractError::InvalidConfig {})?;
+            .ok_or(ContractError::InvalidPoolId(info.pool_id))?;
 
         assert!(pool_id.0 == info.pool_id);
 
         let rebalancer = VaultRebalancer::new(info.rebalancer, deps)?;
 
         let admin = if let Some(admin) = info.admin {
-            Some(deps.api.addr_validate(&admin)?)
+            Some(deps.api.addr_validate(&admin)
+                .map_err(|_| ContractError::InvalidAdminAddress(admin))?)
         } else { 
             match rebalancer {
                 VaultRebalancer::Anyone {} => Ok(None),
-                _ => Err(ContractError::InvalidConfig {})
+                _ => Err(ContractError::ContradictoryConfig { 
+                    reason: "If admin is none, the rebalancer can only be anyone".into()
+                })
             }?
         };
 
@@ -277,7 +282,8 @@ impl VaultRebalancer {
         use VaultRebalancerInstantiateMsg::*;
         match rebalancer {
             Delegate { rebalancer: x } => {
-                let rebalancer = deps.api.addr_validate(&x)?;
+                let rebalancer = deps.api.addr_validate(&x)
+                    .map_err(|_| ContractError::InvalidDelegateAddress(x))?;
                 Ok(Self::Delegate { rebalancer })
             },
             Admin {} => Ok(Self::Admin {}),
