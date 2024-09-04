@@ -1,5 +1,5 @@
 use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, coins};
-use cw20_base::contract::execute_mint;
+use cw20_base::contract::{execute_mint, query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use std::cmp;
 
@@ -55,7 +55,8 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             Ok(to_json_binary(&query::position_balances_with_fees(position_type, deps))?),
         CalcSharesAndUsableAmounts { for_amount0, for_amount1 } => {
             Ok(to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, false, deps, &env))?)
-        }
+        },
+        Balance { address } => to_json_binary(&query_balance(deps, address)?)
     }
 }
 
@@ -303,12 +304,13 @@ pub fn execute(
 
 mod exec {
 
-    use std::str::FromStr;
+    use std::{ops::Sub, str::FromStr};
+    use cosmwasm_std::SubMsg;
     use osmosis_std::types::{
         cosmos::bank::v1beta1::BankQuerier,
-        osmosis::concentratedliquidity::v1beta1::MsgCreatePosition
+        osmosis::concentratedliquidity::v1beta1::{MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest}
     };
-    use crate::{msg::DepositMsg, state::{price_function_inv, raw, Weight}};
+    use crate::{msg::{DepositMsg, PositionType}, state::{price_function_inv, raw, Weight}};
     use super::*;
 
     // TODO More clarifying errors. TODO Events to query positions (deposits).
@@ -370,7 +372,7 @@ mod exec {
 
         // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
 
-        // TODO: Document those invariants. THEYRE NOT requirements, even if it looks like i itt.
+        // TODO: Document those invariants. THEYRE NOT requirements, even if it looks like i it.
         assert!(amount0_used <= amount0 && amount1_used <= amount1);
         assert!(!shares.is_zero());
 
@@ -381,17 +383,16 @@ mod exec {
             })
         }
 
-        {
+        let res = {
             let mut info = info.clone();
             info.sender = contract_addr;
 
             // Invariant: The only allowed minter is this contract itself.
-            execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap();
-        }
+            execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap()
+        };
         
         // TODO Clean this procedure. Is the problem zero amounts? Cant I send 2 amounts at the
         // same time? maybe by filtering the original vec I had?
-        let res = Response::new();
 
         let res = if amount0_used < amount0 {
             // Invariant: We just verified the subtraction wont overflow.
@@ -412,7 +413,41 @@ mod exec {
         Ok(res)
     }
 
-    // TODO I havent even really started cleaning the hard pad did I?
+    // TODO Better return type. TODO hmmmm think of the messages structure.
+    pub fn remove_liquidity_msg(for_position: PositionType, deps: Deps, env: &Env) -> Option<MsgWithdrawPosition> {
+        // Invariant: After instantiation, `VAULT_STATE` is always present.
+        let VaultState { 
+            full_range_position_id,
+            base_position_id, 
+            limit_position_id 
+        } = VAULT_STATE.load(deps.storage).unwrap();
+
+        use PositionType::*;
+        let position_id = match for_position {
+            FullRange => full_range_position_id,
+            Base => base_position_id,
+            Limit => limit_position_id
+        }?;
+
+        // Invariant: We know that if `position_id` is in the state, then
+        //            it refers to a valid `FullPositionBreakdown`.
+        let position_liquidity = PositionByIdRequest { position_id }
+            .query(&deps.querier).unwrap()
+            .position.unwrap()
+            .position.unwrap()
+            .liquidity;
+
+        // USE THIS!! (3 different ids). https://github.com/CosmWasm/cosmwasm/blob/main/SEMANTICS.md#handling-the-reply
+        // Response::new().add_submessage(SubMsg::reply_on_success(msg, id));
+        // TODO Also have to claim spread factor manually.
+        Some(MsgWithdrawPosition {
+            position_id,
+            sender: env.contract.address.clone().into(),
+            liquidity_amount: position_liquidity
+        })
+    }
+
+    // TODO I havent even really started cleaning the hard part did I?
     pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
         use cosmwasm_std::Decimal;
         use osmosis_std::types::cosmos::base::v1beta1::Coin;
@@ -427,46 +462,42 @@ mod exec {
         let pool = pool_id.to_pool(&deps.querier);
         let contract_addr = env.contract.address.to_string();
 
-        let balances = BankQuerier::new(&deps.querier);
-        let coin0_res = balances.balance(contract_addr.clone(), pool.token0.clone())?;
-        let coin1_res = balances.balance(contract_addr.clone(), pool.token1.clone())?;
-
-        let balance0 = if let Some(coin0) = coin0_res.balance {
-            assert!(coin0.denom == pool.token0);
-            // Invariant: We know `coin0_res` holds a valid Decimal as String.
-            Decimal::from_str(&coin0.amount).unwrap()
-        } else { Decimal::zero() };
-
-        let balance1 = if let Some(coin1) = coin1_res.balance {
-            assert!(coin1.denom == pool.token1);
-            // Invariant: We know `coin0_res` holds a valid Decimal as String.
-            Decimal::from_str(&coin1.amount)?
-        } else { Decimal::zero() };
+        let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
 
         let price = pool_id.price(&deps.querier);
-
+        
+        // TODO Handle limit deposit case.
         let (balanced_balance0, balanced_balance1) = {
             // FIXME Those could overflow under extreme conditions, both the
-            // division and the multiplication.
-            let balanced0 = balance0.checked_div(price).unwrap();
-            let balanced1 = balance1.checked_mul(price).unwrap();
+            // division and the multiplication. Lift to Uint256?
+            
+            // Assumption: `price` uses 18 decimals. TODO: Prove it! Wtf is "ToLegacyDec()" in the
+            // osmosis codebase.
+            // TODO Can we downgrade `price` to Uint128 instead?
+            let bal0 = Decimal::new(bal0);
+            let bal1 = Decimal::new(bal1);
 
-            if balanced0 > balance0 { (balance0, balanced1) } 
-            else { (balanced0, balance1) }
+            let balanced0 = bal1.checked_div(price).unwrap();
+            let balanced1 = bal0.checked_mul(price).unwrap();
+
+            if balanced0 > bal0 { (bal0, balanced1) } 
+            else { (balanced0, bal1) }
         };
 
-        assert!(balance0 >= balanced_balance0 && balance1 >= balanced_balance1);
+        assert!(bal0 >= raw(&balanced_balance0) && bal1 >= raw(&balanced_balance1));
 
         let VaultParameters { 
-            base_factor, limit_factor, full_range_weight
+            base_factor,
+            limit_factor,
+            full_range_weight
         } = vault_parameters;
 
-        // We take 1% slippage.
+        // We take 1% slippage. TODO It shouldnt be needed, test rebalances without slippage.
         let slippage = Weight::new(&"0.99".into()).unwrap();
 
         let (full_range_balance0, full_range_balance1) = {
             // TODO Document the math (see [[MagmaLiquidity]]).
-            // FIXME All those unwraps could fail under extreme conditions.
+            // FIXME All those unwraps could fail under extreme conditions. Lift to Uint256?
             let sqrt_k = base_factor.0.sqrt();
 
             let numerator = full_range_weight
@@ -485,7 +516,18 @@ mod exec {
             (x0, y0)
         };
 
-        // TODO Fix business logic.
+        let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
+
+        remove_liquidity_msg(PositionType::FullRange, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
+        remove_liquidity_msg(PositionType::Base, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
+        remove_liquidity_msg(PositionType::Limit, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
+
+
+        let mut new_position_msgs: Vec<MsgCreatePosition> = vec![];
+
         if !full_range_weight.is_zero() {
             // TODO What if we can only put a limit order? Then the math breaks!
 
@@ -494,7 +536,7 @@ mod exec {
                 Coin { denom: pool.token1.clone(), amount: raw(&full_range_balance1) }
             ];
 
-            let _full_range_position = MsgCreatePosition {
+            new_position_msgs.push(MsgCreatePosition {
                 pool_id: pool.id,
                 sender: contract_addr.clone(),
                 lower_tick: pool_id.min_valid_tick(&deps.querier),
@@ -502,24 +544,28 @@ mod exec {
                 tokens_provided: full_range_tokens,
                 token_min_amount0: raw(&slippage.mul_dec(&full_range_balance0)),
                 token_min_amount1: raw(&slippage.mul_dec(&full_range_balance1))
-            };
+            });
         }
 
-        if !base_factor.is_one() {
-
+        let (base_range_balance0, base_range_balance1) = {
             // TODO Prove that those unwraps will never fail.
             let base_range_balance0 = balanced_balance0
                 .checked_sub(full_range_balance0)
                 .unwrap();
+
             let base_range_balance1 = balanced_balance1
                 .checked_sub(full_range_balance1)
                 .unwrap();
 
-            let base_range_tokens = vec![
-                Coin { denom: pool.token0, amount: raw(&base_range_balance0) },
-                Coin { denom: pool.token1, amount: raw(&base_range_balance1) }
-            ];
+            (base_range_balance0, base_range_balance1)
+        };
 
+        if !base_factor.is_one() {
+
+            let base_range_tokens = vec![
+                Coin { denom: pool.token0.clone(), amount: raw(&base_range_balance0) },
+                Coin { denom: pool.token1.clone(), amount: raw(&base_range_balance1) }
+            ];
 
             let current_price = pool_id.price(&deps.querier);
             let lower_price = base_factor.0
@@ -538,22 +584,87 @@ mod exec {
                 price_function_inv(&upper_price), &deps.querier
             );
                 
-            let _base_range_position = MsgCreatePosition {
+            new_position_msgs.push(MsgCreatePosition {
                 pool_id: pool.id,  
-                sender: contract_addr,
+                sender: contract_addr.clone(),
                 lower_tick,
                 upper_tick,
                 tokens_provided: base_range_tokens,
                 token_min_amount0: raw(&slippage.mul_dec(&base_range_balance0)),
                 token_min_amount1: raw(&slippage.mul_dec(&base_range_balance1))
-            };
+            });
         }
 
         if !limit_factor.is_one() {
-            // TODO
+            let (limit_balance0, limit_balance1) = {
+                // TODO Prove those ops wont overflow.
+                let limit_balance0 = Decimal::new(bal0) - balanced_balance0;
+                let limit_balance1 = Decimal::new(bal1) - balanced_balance1;
+                (limit_balance0, limit_balance1)
+            };
+
+            let current_price = pool_id.price(&deps.querier);
+            if limit_balance0.is_zero() {
+                // TODO Prove computation security.
+                let lower_price = current_price
+                    .checked_div(current_price)
+                    .unwrap_or(Decimal::MIN);
+
+                let lower_tick = pool_id.closest_valid_tick(
+                    price_function_inv(&lower_price), &deps.querier
+                );
+
+                // TODO Do we cross down one?
+                let upper_tick = pool_id.current_tick(&deps.querier);
+
+                let limit_tokens = vec![
+                    Coin { denom: pool.token1, amount: raw(&limit_balance1) }
+                ];
+
+                new_position_msgs.push(MsgCreatePosition { 
+                    pool_id: pool.id,  
+                    sender: contract_addr,
+                    lower_tick,
+                    upper_tick,
+                    tokens_provided: limit_tokens,
+                    token_min_amount0: "0".into(),
+                    token_min_amount1: raw(&slippage.mul_dec(&limit_balance1))
+                })
+            } else if limit_balance1.is_zero() {
+                // TODO Prove computation security.
+                let upper_price = current_price
+                    .checked_mul(current_price)
+                    .unwrap_or(Decimal::MIN);
+
+                let upper_tick = pool_id.closest_valid_tick(
+                    price_function_inv(&upper_price), &deps.querier
+                );
+
+                // TODO Do we cross down one?
+                let lower_tick = pool_id.current_tick(&deps.querier);
+
+                let limit_tokens = vec![
+                    Coin { denom: pool.token0, amount: raw(&limit_balance0) }
+                ];
+
+                new_position_msgs.push(MsgCreatePosition { 
+                    pool_id: pool.id,  
+                    sender: contract_addr,
+                    lower_tick,
+                    upper_tick,
+                    tokens_provided: limit_tokens,
+                    token_min_amount0: raw(&slippage.mul_dec(&base_range_balance0)),
+                    token_min_amount1: "0".into()
+                })
+
+            } else { unreachable!() /* TODO: Prove */ }
         }
 
-        unimplemented!()
+        // TODO Callbacks and review the whole thing.
+        Ok(Response::new()
+            .add_messages(liquidity_removal_msgs)
+            .add_messages(new_position_msgs)
+        )
     }
 }
 

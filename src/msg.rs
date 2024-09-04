@@ -1,5 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
+use cw20::BalanceResponse;
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -57,7 +58,9 @@ pub enum QueryMsg {
     #[returns(PositionBalancesWithFeesResponse)]
     PositionBalancesWithFees { position_type: PositionType },
     #[returns(CalcSharesAndUsableAmountsResponse)]
-    CalcSharesAndUsableAmounts { for_amount0: Uint128, for_amount1: Uint128 } // TODO Will work?
+    CalcSharesAndUsableAmounts { for_amount0: Uint128, for_amount1: Uint128 },
+    #[returns(BalanceResponse)]
+    Balance { address: String }
 }
 
 #[cw_serde]

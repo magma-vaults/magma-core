@@ -7,7 +7,7 @@ if [ -d "ts" ]; then
     rm -rd ts
 fi
 
-ts-codegen generate \
+node ./../ts-codegen/packages/ts-codegen/dist/ts-codegen.js generate \
     --schema ./schema \
     --out ./ts \
     --name MagmaCore \

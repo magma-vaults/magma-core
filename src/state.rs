@@ -104,6 +104,10 @@ impl PoolId {
         querier.pool(self.0).unwrap().pool.unwrap().try_into().unwrap()
     }
 
+    pub fn current_tick(&self, querier: &QuerierWrapper) -> i64 {
+        self.to_pool(querier).current_tick
+    }
+
     fn tick_spacing(&self, querier: &QuerierWrapper) -> i64 {
         // Invariant: Wont overflow under reasonable conditions.
         self.to_pool(querier).tick_spacing as i64
@@ -122,6 +126,7 @@ impl PoolId {
         (MAX_TICK/spacing) * spacing
     }
 
+    // TODO Unsafe operations to prove here.
     pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i64 {
         let value: i64 = value.into();
         let spacing = self.tick_spacing(querier);
