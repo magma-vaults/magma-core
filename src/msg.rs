@@ -37,11 +37,11 @@ pub struct InstantiateMsg {
 
 #[cw_serde]
 pub struct DepositMsg {
-    pub amount0: String, // Uint128 value.
-    pub amount1: String, // Uint128 value.
-    pub amount0_min: String, // Uint128 value.
-    pub amount1_min: String, // Uint128 value.
-    pub to: String // Addr value.
+    pub amount0: Uint128,
+    pub amount1: Uint128,
+    pub amount0_min: Uint128,
+    pub amount1_min: Uint128,
+    pub to: String // Addr to mint shares to.
 }
 
 #[cw_serde]

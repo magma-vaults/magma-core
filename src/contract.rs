@@ -1,4 +1,4 @@
-use cosmwasm_std::{coins, entry_point, from_json, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, Uint128};
+use cosmwasm_std::{coins, entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, SubMsgResult, Uint128, WasmMsg};
 use cw20_base::contract::{execute_mint, query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
@@ -330,12 +330,6 @@ mod exec {
         let denom0 = vault_info.demon0(&deps.querier);
         let denom1 = vault_info.demon1(&deps.querier);
 
-        // TODO: Handle better Errors: something like `use errors::DepositErrors::*`.
-        let amount0 = Uint128::from_str(&amount0).map_err(|_| ContractError::NonUint128CoinAmount(amount0))?;
-        let amount1 = Uint128::from_str(&amount1).map_err(|_| ContractError::NonUint128CoinAmount(amount1))?;
-        let amount0_min = Uint128::from_str(&amount0_min).map_err(|_| ContractError::NonUint128CoinAmount(amount0_min))?;
-        let amount1_min = Uint128::from_str(&amount1_min).map_err(|_| ContractError::NonUint128CoinAmount(amount1_min))?;
-
         if amount0.is_zero() && amount1.is_zero() && info.funds.is_empty() {
             return Err(ContractError::ZeroTokensSent {})
         }
@@ -581,7 +575,7 @@ mod exec {
         } else if balanced_balance1.is_zero() || balanced_balance0.is_zero() {
             assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
         } else {
-            assert!(!full_range_balance0.is_zero() && full_range_balance1.is_zero());
+            assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
 
             // We take 1% slippage to check if balances have the right proportion.
             let balances_price = full_range_balance1 / full_range_balance0;
@@ -641,12 +635,12 @@ mod exec {
         if !base_factor.is_one() && !base_range_balance0.is_zero() {
 
             let current_price = pool_id.price(&deps.querier);
-            let lower_price = base_factor.0
-                .checked_div(current_price)
+            let lower_price = current_price
+                .checked_div(base_factor.0)
                 .unwrap_or(Decimal::MIN);
 
-            let upper_price = base_factor.0
-                .checked_mul(current_price)
+            let upper_price = current_price
+                .checked_mul(base_factor.0)
                 .unwrap_or(Decimal::MAX);
 
             new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
@@ -664,10 +658,10 @@ mod exec {
             let current_price = pool_id.price(&deps.querier);
             if limit_balance0.is_zero() {
                 let lower_price = current_price
-                    .checked_div(current_price)
+                    .checked_div(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_always(create_position_msg(
                     price_function_inv(&lower_price),
                     pool_id.current_tick(&deps.querier),
                     Decimal::zero(),
@@ -677,10 +671,10 @@ mod exec {
                 ), 2))
             } else if limit_balance1.is_zero() {
                 let upper_price = current_price
-                    .checked_mul(current_price)
+                    .checked_mul(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_always(create_position_msg(
                     pool_id.current_tick(&deps.querier),
                     price_function_inv(&upper_price),
                     limit_balance0,
@@ -732,8 +726,15 @@ mod exec {
 // TODO: Prove all unwraps security.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
-    let data = msg.result.unwrap().data.unwrap();
-    let new_position: MsgCreatePositionResponse = from_json(&data).unwrap();
+
+    if msg.id == 2 { panic!("solved") }
+    
+    // match msg.result {
+    //     SubMsgResult::Err(err) => panic!("Err: {:?}, Id: {}", err, msg.id),
+    //     SubMsgResult::Ok(_) => {}
+    // };
+
+    let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
 
     let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
     match msg.id {
@@ -745,52 +746,51 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 
     VAULT_STATE.save(deps.storage, &vault_state).unwrap();
 
-    // TODO Add attributes?
     Ok(Response::new())
 }
 
 #[cfg(test)]
 mod test {
+    use core::panic;
     use std::str::FromStr;
 
-    use crate::constants::{MAX_TICK, MIN_TICK};
+    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}, state::{price_function_inv, PoolId}};
 
     use super::*;
     use cosmwasm_std::{Coin, Decimal};
-    use osmosis_std::types::{cosmos::base::query::v1beta1::PageRequest, osmosis::{concentratedliquidity::{poolmodel::concentrated::v1beta1::MsgCreateConcentratedPool, v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PoolsRequest}}, poolmanager::v1beta1::PoolRequest}};
-    use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, Wasm};
+    use osmosis_std::types::{cosmos::base::query::v1beta1::PageRequest, osmosis::{concentratedliquidity::{poolmodel::concentrated::v1beta1::MsgCreateConcentratedPool, v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PoolsRequest}}, poolmanager::v1beta1::{PoolRequest, SpotPriceRequest}}};
+    use osmosis_test_tube::{cosmrs::bip32::secp256k1::sha2::digest::block_buffer::LazyBuffer, Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
-    #[test]
-    fn rebalance() {
-        let usdc_denom = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
-        let mut app = OsmosisTestApp::new();
-        let accs = app.init_accounts(&[
-            Coin::new(1_000_000_000_000u128, usdc_denom),
-            Coin::new(1_000_000_000_000u128, "uosmo")
-        ], 2).unwrap();
-        let deployer = &accs[0];
-        
-        let wasm = Wasm::new(&app);
-        let contract_bytecode = 
-            std::fs::read("target/wasm32-unknown-unknown/release/magma_core.wasm")
-            .unwrap();
+    struct PoolMockupInfo {
+        pool_balance0: u128,
+        pool_balance1: u128,
+        pool_id: u64,
+        app: OsmosisTestApp,
+        deployer: SigningAccount
+    }
 
-        let code_id = wasm
-            .store_code(&contract_bytecode, None, deployer)
-            .unwrap()
-            .data.code_id;
+    const USDC_DENOM: &str = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
+    const OSMO_DENOM: &str = "uosmo";
+
+    fn create_basic_usdc_osmo_pool() -> PoolMockupInfo {
+        let app = OsmosisTestApp::new();
+        let deployer = app.init_account(&[
+            Coin::new(1_000_000_000_000u128, USDC_DENOM),
+            Coin::new(1_000_000_000_000u128, OSMO_DENOM)
+        ]).unwrap();
 
         let cl = ConcentratedLiquidity::new(&app);
         let gov = GovWithAppAccess::new(&app);
 
-        let _ = gov.propose_and_execute(
+        // Pool setup.
+        gov.propose_and_execute(
             CreateConcentratedLiquidityPoolsProposal::TYPE_URL.to_string(),
             CreateConcentratedLiquidityPoolsProposal {
                 title: "Create cl uosmo:usdc pool".into(),
                 description: "blabla".into(),
                 pool_records: vec![PoolRecord {
-                    denom0: usdc_denom.into(),
-                    denom1: "uosmo".into(),
+                    denom0: USDC_DENOM.into(),
+                    denom1: OSMO_DENOM.into(),
                     tick_spacing: 100,
                     spread_factor: "10".into()
                 }]
@@ -809,13 +809,106 @@ mod test {
             lower_tick: MIN_TICK.into(),
             upper_tick: MAX_TICK.into(),
             tokens_provided: vec![
-                Coin::new(pool_x, usdc_denom).into(),
-                Coin::new(pool_y, "uosmo").into()
+                Coin::new(pool_x, USDC_DENOM).into(),
+                Coin::new(pool_y, OSMO_DENOM).into()
             ],
             token_min_amount0: pool_x.to_string(),
             token_min_amount1: pool_y.to_string()
-        }, deployer).unwrap().data;
+        }, &deployer).unwrap().data;
 
         assert_eq!(position_res.position_id, 1);
+        PoolMockupInfo {
+            pool_balance0: pool_x,
+            pool_balance1: pool_y,
+            pool_id,
+            app,
+            deployer
+        }
+    }
+
+    fn store_vaults_code(wasm: &Wasm<OsmosisTestApp>, deployer: &SigningAccount) -> u64 {
+        let contract_bytecode = 
+            std::fs::read("target/wasm32-unknown-unknown/release/magma_core.wasm")
+            .unwrap();
+
+        wasm.store_code(&contract_bytecode, None, deployer)
+            .unwrap()
+            .data
+            .code_id
+    }
+
+    #[test]
+    fn price_function_inv_test() {
+        let PoolMockupInfo { pool_id, app, .. } = create_basic_usdc_osmo_pool();
+        let pm = PoolManager::new(&app);
+        let p = pm.query_spot_price(&SpotPriceRequest { 
+            pool_id, 
+            base_asset_denom: USDC_DENOM.into(),
+            quote_asset_denom: OSMO_DENOM.into()
+        }).unwrap().spot_price;
+        let p = Decimal::from_str(&p).unwrap();
+
+        let base_factor = Decimal::from_str("2").unwrap();
+        let lower_price = p / base_factor;
+        let upper_price = p * base_factor;
+
+        let lower_tick = price_function_inv(&lower_price);
+        let upper_tick = price_function_inv(&upper_price);
+
+        // FIXME 
+        assert!(lower_tick != 0 && upper_tick != 0 && upper_tick > lower_tick);
+        panic!("Lower = {}, Upper = {}", lower_tick, upper_tick);
+    }
+
+
+    #[test]
+    fn normal_rebalance() {
+        let PoolMockupInfo { pool_id, app, deployer, .. } = create_basic_usdc_osmo_pool();
+        
+        // Vault setup.
+        let wasm = Wasm::new(&app);
+        let code_id = store_vaults_code(&wasm, &deployer);
+
+        let vault_addr = wasm.instantiate(
+            code_id,
+            &InstantiateMsg {
+                vault_info: VaultInfoInstantiateMsg {
+                    pool_id,
+                    vault_name: "My USDC/OSMO vault".into(),
+                    vault_symbol: "USDCOSMOV".into(),
+                    admin: Some(deployer.address()),
+                    rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                },
+                vault_parameters: VaultParametersInstantiateMsg {
+                    base_factor: "2".into(),
+                    limit_factor: "1.45".into(),
+                    full_range_weight: "0.55".into()
+                }
+            },
+            None, Some("my vault"), &[], &deployer
+        ).unwrap().data.address;
+        
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(1_000),
+                amount1: Uint128::new(1_500),
+                amount0_min: Uint128::new(1_000),
+                amount1_min: Uint128::new(1_500),
+                to: deployer.address()
+            }),
+            &[
+                Coin::new(1_000, USDC_DENOM).into(),
+                Coin::new(1_500, OSMO_DENOM).into()
+            ],
+            &deployer
+        ).unwrap();
+
+        let res = wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Rebalance {},
+            &[],
+            &deployer
+        ).unwrap();
     }
 }

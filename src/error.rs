@@ -37,9 +37,6 @@ pub enum ContractError {
     InvalidWeight(String),
 
     // Deposit errors.
-    #[error("Invalid non Uint128 coin amount: {0}")]
-    NonUint128CoinAmount(String),
-
     #[error("Improper balances: expected {expected} but got {got}")]
     ImproperSentAmounts { expected: String, got: String },
 
