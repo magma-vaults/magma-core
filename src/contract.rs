@@ -454,8 +454,6 @@ mod exec {
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
         // like `minTickMove` or `period`.
 
-        // TODO Withdraw current liquidities.
-
         let vault_info = VAULT_INFO.load(deps.storage)?;
         let vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
         let pool_id = &vault_info.pool_id;

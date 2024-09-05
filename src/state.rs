@@ -1,10 +1,10 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Decimal, Deps, Int128, OverflowError, QuerierWrapper, SignedDecimal, SignedDecimal256, Uint128};
 use cw_storage_plus::Item;
-use osmosis_std::types::osmosis::{
+use osmosis_std::types::{cosmos::base, osmosis::{
     concentratedliquidity::v1beta1::{FullTick, MsgCreatePosition, Pool, TickInfo},
     poolmanager::v1beta1::{PoolmanagerQuerier, SpotPriceRequest}
-};
+}};
 
 use readonly;
 
@@ -28,6 +28,7 @@ impl Weight {
     }
 
     pub fn is_zero(&self) -> bool { self.0 == Decimal::zero() }
+    pub fn is_max(&self) -> bool { self.0 == Weight::MAX }
 
 }
 
@@ -217,13 +218,26 @@ impl VaultParameters {
         let full_range_weight = Weight::new(&params.full_range_weight)
             .ok_or(ContractError::InvalidWeight(params.full_range_weight))?;
 
-        if base_factor.is_one() && limit_factor.is_one() {
-            if full_range_weight.0 != Weight::MAX {
-                return Err(ContractError::ContradictoryConfig { 
-                    reason: "Both price factor are 1, thus the full range weight should also be 1".into()
-                })
-            }
-        }
+        
+        // NOTE: We dont support vaults with idle capital for now.
+        match (full_range_weight.is_zero(), base_factor.is_one(), limit_factor.is_one()) {
+            (true, true, true) => Err(ContractError::ContradictoryConfig {
+                reason: "All vault parameters will produce null positions, all capital would be idle".into()
+            }),
+            (true, true, _) => Err(ContractError::ContradictoryConfig { 
+                reason: "A vault without balanced orders will have idle capital".into()
+            }),
+            (_, _, true) => Err(ContractError::ContradictoryConfig { 
+                reason: "A vault without a limit order will have idle capital".into()
+            }),
+            (_, true, _) if !full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
+                reason: "If the vault doenst have a base order, the full range weight should be 1".into()
+            }),
+            (false, false, _) if full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
+                reason: "If the full range weight is 1, the base factor should also be".into()
+            }),
+            _ => Ok(())
+        }?;
 
         Ok(VaultParameters {
             base_factor, limit_factor, full_range_weight
