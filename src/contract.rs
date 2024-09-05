@@ -309,7 +309,7 @@ mod exec {
     use std::str::FromStr;
     use cosmwasm_std::{Decimal, SubMsg};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
-        MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
+        MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
     use crate::{msg::{DepositMsg, PositionType}, state::{price_function_inv, raw, Weight}};
     use super::*;
@@ -505,7 +505,7 @@ mod exec {
             return Err(ContractError::NothingToRebalance {})
         }
 
-        let price = pool_id.price(&deps.querier);
+        let price = pool_id.price(&deps.querier); // TODO: What if `price == 0`?
         
         let (balanced_balance0, balanced_balance1) = {
             // Assumption: `price` uses 18 decimals. TODO: Prove it! Wtf is "ToLegacyDec()" in the
@@ -704,8 +704,25 @@ mod exec {
         remove_liquidity_msg(PositionType::Limit, deps, &env)
             .map(|msg| liquidity_removal_msgs.push(msg));
 
+        
+        // Invariant: State is always present after instantiation.
+        let ids = VAULT_STATE.load(deps.storage).unwrap();
+        let ids_to_claim: Vec<u64> = vec![
+            ids.full_range_position_id,
+            ids.base_position_id,
+            ids.limit_position_id
+        ].into_iter().filter_map(|id| id).collect();
+
+        // TODO Will it crash if `ids_to_claim.is_empty()`?
+        // TODO Add callback for protocol fees and manager fees.
+        let rewards_claim_msg = MsgCollectSpreadRewards {
+            position_ids: ids_to_claim,
+            sender: env.contract.address.into()
+        };
+        
         // TODO Callbacks and review the whole thing.
         Ok(Response::new()
+            .add_message(rewards_claim_msg)
             .add_messages(liquidity_removal_msgs)
             .add_submessages(new_position_msgs)
         )
@@ -732,3 +749,73 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
     Ok(Response::new())
 }
 
+#[cfg(test)]
+mod test {
+    use std::str::FromStr;
+
+    use crate::constants::{MAX_TICK, MIN_TICK};
+
+    use super::*;
+    use cosmwasm_std::{Coin, Decimal};
+    use osmosis_std::types::{cosmos::base::query::v1beta1::PageRequest, osmosis::{concentratedliquidity::{poolmodel::concentrated::v1beta1::MsgCreateConcentratedPool, v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PoolsRequest}}, poolmanager::v1beta1::PoolRequest}};
+    use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, Wasm};
+
+    #[test]
+    fn rebalance() {
+        let usdc_denom = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
+        let mut app = OsmosisTestApp::new();
+        let accs = app.init_accounts(&[
+            Coin::new(1_000_000_000_000u128, usdc_denom),
+            Coin::new(1_000_000_000_000u128, "uosmo")
+        ], 2).unwrap();
+        let deployer = &accs[0];
+        
+        let wasm = Wasm::new(&app);
+        let contract_bytecode = 
+            std::fs::read("target/wasm32-unknown-unknown/release/magma_core.wasm")
+            .unwrap();
+
+        let code_id = wasm
+            .store_code(&contract_bytecode, None, deployer)
+            .unwrap()
+            .data.code_id;
+
+        let cl = ConcentratedLiquidity::new(&app);
+        let gov = GovWithAppAccess::new(&app);
+
+        let _ = gov.propose_and_execute(
+            CreateConcentratedLiquidityPoolsProposal::TYPE_URL.to_string(),
+            CreateConcentratedLiquidityPoolsProposal {
+                title: "Create cl uosmo:usdc pool".into(),
+                description: "blabla".into(),
+                pool_records: vec![PoolRecord {
+                    denom0: usdc_denom.into(),
+                    denom1: "uosmo".into(),
+                    tick_spacing: 100,
+                    spread_factor: "10".into()
+                }]
+            },
+            deployer.address(),
+            &deployer
+        ).unwrap();
+        
+        let pool_x = 100_000;
+        let pool_y = 200_000;
+        let pool_id = 1;
+
+        let position_res = cl.create_position(MsgCreatePosition {
+            pool_id,
+            sender: deployer.address(),
+            lower_tick: MIN_TICK.into(),
+            upper_tick: MAX_TICK.into(),
+            tokens_provided: vec![
+                Coin::new(pool_x, usdc_denom).into(),
+                Coin::new(pool_y, "uosmo").into()
+            ],
+            token_min_amount0: pool_x.to_string(),
+            token_min_amount1: pool_y.to_string()
+        }, deployer).unwrap().data;
+
+        assert_eq!(position_res.position_id, 1);
+    }
+}
