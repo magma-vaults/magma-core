@@ -1,6 +1,8 @@
-use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult, Uint128, coins};
+use cosmwasm_std::{coins, entry_point, from_binary, from_json, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, Uint128};
 use cw20_base::contract::{execute_mint, query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
+use cw_utils::{parse_execute_response_data, parse_reply_execute_data};
+use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 use std::cmp;
 
 use crate::msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, QueryMsg, VaultBalancesResponse};
@@ -305,7 +307,7 @@ pub fn execute(
 mod exec {
 
     use std::str::FromStr;
-    use cosmwasm_std::Decimal;
+    use cosmwasm_std::{Decimal, SubMsg};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
         MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
@@ -589,22 +591,23 @@ mod exec {
             .map(|msg| liquidity_removal_msgs.push(msg));
 
 
-        let mut new_position_msgs: Vec<MsgCreatePosition> = vec![];
+        let mut new_position_msgs: Vec<SubMsg> = vec![];
 
         // If `full_range_balance0` is not zero, we already checked that neither
         // `full_range_balance1` will be. If they happened to be zero, it means that
         // the vault only holds tokens for limit orders for now, or that
         // the vault simply has zero `full_range_weight`.
         if !full_range_weight.is_zero() && !full_range_balance0.is_zero() {
-            new_position_msgs.push(create_position_msg(
+            new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                 pool_id.min_valid_tick(&deps.querier),
                 pool_id.max_valid_tick(&deps.querier),
                 full_range_balance0,
                 full_range_balance1,
                 deps,
                 &env
-            ))
+            ), 0))
         }
+
 
         let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
             // TODO Prove that those unwraps will never fail.
@@ -639,14 +642,14 @@ mod exec {
                 .checked_mul(current_price)
                 .unwrap_or(Decimal::MAX);
 
-            new_position_msgs.push(create_position_msg(
+            new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                 price_function_inv(&lower_price),
                 price_function_inv(&upper_price),
                 base_range_balance0,
                 base_range_balance1,
                 deps,
                 &env
-            ))
+            ), 1))
         }
 
         if !limit_factor.is_one() {
@@ -664,28 +667,28 @@ mod exec {
                     .checked_div(current_price)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     price_function_inv(&lower_price),
                     pool_id.current_tick(&deps.querier),
                     Decimal::zero(),
                     limit_balance1,
                     deps,
                     &env
-                ))
+                ), 2))
             } else if limit_balance1.is_zero() {
                 // TODO Prove computation security.
                 let upper_price = current_price
                     .checked_mul(current_price)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     pool_id.current_tick(&deps.querier),
                     price_function_inv(&upper_price),
                     limit_balance0,
                     Decimal::zero(),
                     deps,
                     &env
-                ))
+                ), 2))
             } else { 
                 // Invariant: Both limit balances cant be zero, or the resutling position
                 //            wouldnt be a limit position.
@@ -696,8 +699,27 @@ mod exec {
         // TODO Callbacks and review the whole thing.
         Ok(Response::new()
             .add_messages(liquidity_removal_msgs)
-            .add_messages(new_position_msgs)
+            .add_submessages(new_position_msgs)
         )
     }
 }
 
+// TODO: Prove all unwraps security.
+#[entry_point]
+pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
+    let data = msg.result.unwrap().data.unwrap();
+    let new_position: MsgCreatePositionResponse = from_json(&data).unwrap();
+
+    let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
+    match msg.id {
+        0 => { vault_state.full_range_position_id = Some(new_position.position_id) },
+        1 => { vault_state.base_position_id = Some(new_position.position_id) },
+        2 => { vault_state.limit_position_id = Some(new_position.position_id) },
+        _ => unreachable!()
+    };
+
+    VAULT_STATE.save(deps.storage, &vault_state).unwrap();
+
+    // TODO Add attributes?
+    Ok(Response::new())
+}
