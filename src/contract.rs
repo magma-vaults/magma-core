@@ -304,11 +304,10 @@ pub fn execute(
 
 mod exec {
 
-    use std::{intrinsics::unreachable, ops::Sub, str::FromStr};
-    use cosmwasm_std::SubMsg;
-    use osmosis_std::types::{
-        cosmos::bank::v1beta1::BankQuerier,
-        osmosis::concentratedliquidity::v1beta1::{MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest}
+    use std::str::FromStr;
+    use cosmwasm_std::Decimal;
+    use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
+        MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
     use crate::{msg::{DepositMsg, PositionType}, state::{price_function_inv, raw, Weight}};
     use super::*;
@@ -320,7 +319,7 @@ mod exec {
         env: Env,
         info: MessageInfo
     ) -> Result<Response, ContractError> {
-        use cosmwasm_std::{BankMsg, Coin, Uint128};
+        use cosmwasm_std::{BankMsg, Uint128};
         
         // Invariant: `VAULT_INFO` should always be present after instantiation.
         let vault_info = VAULT_INFO.load(deps.storage).unwrap();
@@ -447,20 +446,56 @@ mod exec {
         })
     }
 
-    // TODO I havent even really started cleaning the hard part did I?
-    pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
-        use cosmwasm_std::Decimal;
+    pub fn create_position_msg(
+        lower_tick: i32,
+        upper_tick: i32,
+        tokens_provided0: Decimal,
+        tokens_provided1: Decimal,
+        deps: Deps,
+        env: &Env
+    ) -> MsgCreatePosition {
         use osmosis_std::types::cosmos::base::v1beta1::Coin;
+
+        // Invariant: Any state will be initialized after instantation.
+        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+        let pool_id = &vault_info.pool_id;
+        let pool = pool_id.to_pool(&deps.querier);
+
+        let tokens_provided = vec![
+            Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
+            Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) }
+        ];
+
+        let lower_tick = pool_id.closest_valid_tick(lower_tick, &deps.querier).into();
+        let upper_tick = pool_id.closest_valid_tick(upper_tick, &deps.querier).into();
+
+        // We take 1% slippage. 
+        // TODO It shouldnt be needed, test rebalances without slippage.
+        let slippage = Weight::new(&"0.99".into()).unwrap();
+
+        MsgCreatePosition {
+            pool_id: pool.id,  
+            sender: env.contract.address.clone().into(),
+            lower_tick,
+            upper_tick,
+            tokens_provided,
+            token_min_amount0: raw(&slippage.mul_dec(&tokens_provided0)),
+            token_min_amount1: raw(&slippage.mul_dec(&tokens_provided1))
+        }
+    }
+
+    // TODO Finish cleanup.
+    pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
         // like `minTickMove` or `period`.
 
         // Invariant: Any state will be initialized after instantation.
-        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
-        let vault_parameters = VAULT_PARAMETERS.load(deps.storage).unwrap();
-
-        let pool_id = &vault_info.pool_id;
-        let pool = pool_id.to_pool(&deps.querier);
-        let contract_addr = env.contract.address.to_string();
+        let pool_id = &VAULT_INFO.load(deps.storage).unwrap().pool_id;
+        let VaultParameters { 
+            base_factor,
+            limit_factor,
+            full_range_weight 
+        } = VAULT_PARAMETERS.load(deps.storage).unwrap();
 
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
 
@@ -503,16 +538,6 @@ mod exec {
             // Use slippage if needed.
         }
 
-        let VaultParameters { 
-            base_factor,
-            limit_factor,
-            full_range_weight
-        } = vault_parameters;
-
-        // We take 1% slippage. 
-        // TODO It shouldnt be needed, test rebalances without slippage.
-        let slippage = Weight::new(&"0.99".into()).unwrap();
-
         let (full_range_balance0, full_range_balance1) = {
             // TODO Document the math (see [[MagmaLiquidity]]).
             // FIXME All those unwraps could fail under extreme conditions. Lift to Uint256?
@@ -550,7 +575,7 @@ mod exec {
         } else {
             assert!(!full_range_balance0.is_zero() && full_range_balance1.is_zero())
             // TODO: Add invariant to check if full range amounts are really in
-            // proportion (ie, `full_range_balance0/full_range_balance1= p`).
+            // proportion (ie, `full_range_balance1/full_range_balance0 = p`).
             // Use slippage if needed.
         }
 
@@ -571,20 +596,14 @@ mod exec {
         // the vault only holds tokens for limit orders for now, or that
         // the vault simply has zero `full_range_weight`.
         if !full_range_weight.is_zero() && !full_range_balance0.is_zero() {
-            let full_range_tokens = vec![
-                Coin { denom: pool.token0.clone(), amount: raw(&full_range_balance0) },
-                Coin { denom: pool.token1.clone(), amount: raw(&full_range_balance1) }
-            ];
-
-            new_position_msgs.push(MsgCreatePosition {
-                pool_id: pool.id,
-                sender: contract_addr.clone(),
-                lower_tick: pool_id.min_valid_tick(&deps.querier),
-                upper_tick:  pool_id.max_valid_tick(&deps.querier),
-                tokens_provided: full_range_tokens,
-                token_min_amount0: raw(&slippage.mul_dec(&full_range_balance0)),
-                token_min_amount1: raw(&slippage.mul_dec(&full_range_balance1))
-            });
+            new_position_msgs.push(create_position_msg(
+                pool_id.min_valid_tick(&deps.querier),
+                pool_id.max_valid_tick(&deps.querier),
+                full_range_balance0,
+                full_range_balance1,
+                deps,
+                &env
+            ))
         }
 
         let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
@@ -611,11 +630,6 @@ mod exec {
         // `base_range_balance1` will be.
         if !base_factor.is_one() && !base_range_balance0.is_zero() {
 
-            let base_range_tokens = vec![
-                Coin { denom: pool.token0.clone(), amount: raw(&base_range_balance0) },
-                Coin { denom: pool.token1.clone(), amount: raw(&base_range_balance1) }
-            ];
-
             let current_price = pool_id.price(&deps.querier);
             let lower_price = base_factor.0
                 .checked_div(current_price)
@@ -625,23 +639,14 @@ mod exec {
                 .checked_mul(current_price)
                 .unwrap_or(Decimal::MAX);
 
-            let lower_tick = pool_id.closest_valid_tick(
-                price_function_inv(&lower_price), &deps.querier
-            );
-
-            let upper_tick = pool_id.closest_valid_tick(
-                price_function_inv(&upper_price), &deps.querier
-            );
-                
-            new_position_msgs.push(MsgCreatePosition {
-                pool_id: pool.id,  
-                sender: contract_addr.clone(),
-                lower_tick,
-                upper_tick,
-                tokens_provided: base_range_tokens,
-                token_min_amount0: raw(&slippage.mul_dec(&base_range_balance0)),
-                token_min_amount1: raw(&slippage.mul_dec(&base_range_balance1))
-            });
+            new_position_msgs.push(create_position_msg(
+                price_function_inv(&lower_price),
+                price_function_inv(&upper_price),
+                base_range_balance0,
+                base_range_balance1,
+                deps,
+                &env
+            ))
         }
 
         if !limit_factor.is_one() {
@@ -659,53 +664,28 @@ mod exec {
                     .checked_div(current_price)
                     .unwrap_or(Decimal::MIN);
 
-                let lower_tick = pool_id.closest_valid_tick(
-                    price_function_inv(&lower_price), &deps.querier
-                );
-
-                // TODO Do we cross down one?
-                let upper_tick = pool_id.current_tick(&deps.querier);
-
-                let limit_tokens = vec![
-                    Coin { denom: pool.token1, amount: raw(&limit_balance1) }
-                ];
-
-                new_position_msgs.push(MsgCreatePosition { 
-                    pool_id: pool.id,  
-                    sender: contract_addr,
-                    lower_tick,
-                    upper_tick,
-                    tokens_provided: limit_tokens,
-                    token_min_amount0: "0".into(),
-                    token_min_amount1: raw(&slippage.mul_dec(&limit_balance1))
-                })
+                new_position_msgs.push(create_position_msg(
+                    price_function_inv(&lower_price),
+                    pool_id.current_tick(&deps.querier),
+                    Decimal::zero(),
+                    limit_balance1,
+                    deps,
+                    &env
+                ))
             } else if limit_balance1.is_zero() {
                 // TODO Prove computation security.
                 let upper_price = current_price
                     .checked_mul(current_price)
                     .unwrap_or(Decimal::MIN);
 
-                let upper_tick = pool_id.closest_valid_tick(
-                    price_function_inv(&upper_price), &deps.querier
-                );
-
-                // TODO Do we cross down one?
-                let lower_tick = pool_id.current_tick(&deps.querier);
-
-                let limit_tokens = vec![
-                    Coin { denom: pool.token0, amount: raw(&limit_balance0) }
-                ];
-
-                new_position_msgs.push(MsgCreatePosition { 
-                    pool_id: pool.id,  
-                    sender: contract_addr,
-                    lower_tick,
-                    upper_tick,
-                    tokens_provided: limit_tokens,
-                    token_min_amount0: raw(&slippage.mul_dec(&base_range_balance0)),
-                    token_min_amount1: "0".into()
-                })
-
+                new_position_msgs.push(create_position_msg(
+                    pool_id.current_tick(&deps.querier),
+                    price_function_inv(&upper_price),
+                    limit_balance0,
+                    Decimal::zero(),
+                    deps,
+                    &env
+                ))
             } else { 
                 // Invariant: Both limit balances cant be zero, or the resutling position
                 //            wouldnt be a limit position.
