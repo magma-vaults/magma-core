@@ -304,7 +304,7 @@ pub fn execute(
 
 mod exec {
 
-    use std::{ops::Sub, str::FromStr};
+    use std::{intrinsics::unreachable, ops::Sub, str::FromStr};
     use cosmwasm_std::SubMsg;
     use osmosis_std::types::{
         cosmos::bank::v1beta1::BankQuerier,
@@ -454,17 +454,22 @@ mod exec {
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
         // like `minTickMove` or `period`.
 
-        let vault_info = VAULT_INFO.load(deps.storage)?;
-        let vault_parameters = VAULT_PARAMETERS.load(deps.storage)?;
+        // Invariant: Any state will be initialized after instantation.
+        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+        let vault_parameters = VAULT_PARAMETERS.load(deps.storage).unwrap();
+
         let pool_id = &vault_info.pool_id;
         let pool = pool_id.to_pool(&deps.querier);
         let contract_addr = env.contract.address.to_string();
 
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
 
+        if bal0.is_zero() && bal1.is_zero() {
+            // TODO: Return custom error: Nothing to rebalance.
+        }
+
         let price = pool_id.price(&deps.querier);
         
-        // TODO Handle limit deposit case.
         let (balanced_balance0, balanced_balance1) = {
             // FIXME Those could overflow under extreme conditions, both the
             // division and the multiplication. Lift to Uint256?
@@ -484,13 +489,28 @@ mod exec {
 
         assert!(bal0 >= raw(&balanced_balance0) && bal1 >= raw(&balanced_balance1));
 
+        // Invariant: Balanced positions have both amounts different from zero. 
+        //            So, if at least one of the in balance amounts are zero,
+        //            then both have to be. And that can only be the case if
+        //            at least one of the inputed amounts was also zero, in
+        //            which case the inputed amounts could only produce a limit
+        //            position.
+        if balanced_balance0.is_zero() || balanced_balance1.is_zero() {
+            assert!(balanced_balance0.is_zero() && balanced_balance1.is_zero());
+            assert!(bal0.is_zero() || bal1.is_zero());
+            // TODO: Add invariant to check if balanced amounts are really in
+            // proportion (ie, `balanced_balance1/balanced_balance0 = p`)
+            // Use slippage if needed.
+        }
+
         let VaultParameters { 
             base_factor,
             limit_factor,
             full_range_weight
         } = vault_parameters;
 
-        // We take 1% slippage. TODO It shouldnt be needed, test rebalances without slippage.
+        // We take 1% slippage. 
+        // TODO It shouldnt be needed, test rebalances without slippage.
         let slippage = Weight::new(&"0.99".into()).unwrap();
 
         let (full_range_balance0, full_range_balance1) = {
@@ -505,14 +525,34 @@ mod exec {
 
             let denominator = sqrt_k
                 .checked_sub(Decimal::one())
-                .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`
+                .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`.
                 .checked_add(full_range_weight.0)
                 .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
 
+            // Invariant: Wont produce a `DivisionByZero`.
+            // Proof: Let `w \in [0, 1]` be the `full_range_weight`. Let `k \in [1, +\infty)`
+            //        be the `base_factor`. Then `sqrt(k) + w - 1` could only be `0` if
+            //        `sqrt(k) + w` was `1`, but thats impossible, because `w > 0 \lor k > 1`
+            //        is invariant (see `VaultParameters` instantiation).
             let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
             let y0 = x0.checked_mul(price).unwrap();
             (x0, y0)
         };
+
+        // Invariant: If any of the balanced balances is not zero, and if the vault
+        //            uses full range positions, then both balances for the full
+        //            range position shouldnt be zero, or the resulting position
+        //            wouldnt be in proportion.
+        if full_range_weight.is_zero() {
+            assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
+        } else if balanced_balance1.is_zero() || balanced_balance0.is_zero() {
+            assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
+        } else {
+            assert!(!full_range_balance0.is_zero() && full_range_balance1.is_zero())
+            // TODO: Add invariant to check if full range amounts are really in
+            // proportion (ie, `full_range_balance0/full_range_balance1= p`).
+            // Use slippage if needed.
+        }
 
         let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
 
@@ -526,9 +566,11 @@ mod exec {
 
         let mut new_position_msgs: Vec<MsgCreatePosition> = vec![];
 
-        if !full_range_weight.is_zero() {
-            // TODO What if we can only put a limit order? Then the math breaks!
-
+        // If `full_range_balance0` is not zero, we already checked that neither
+        // `full_range_balance1` will be. If they happened to be zero, it means that
+        // the vault only holds tokens for limit orders for now, or that
+        // the vault simply has zero `full_range_weight`.
+        if !full_range_weight.is_zero() && !full_range_balance0.is_zero() {
             let full_range_tokens = vec![
                 Coin { denom: pool.token0.clone(), amount: raw(&full_range_balance0) },
                 Coin { denom: pool.token1.clone(), amount: raw(&full_range_balance1) }
@@ -545,7 +587,7 @@ mod exec {
             });
         }
 
-        let (base_range_balance0, base_range_balance1) = {
+        let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
             // TODO Prove that those unwraps will never fail.
             let base_range_balance0 = balanced_balance0
                 .checked_sub(full_range_balance0)
@@ -556,9 +598,18 @@ mod exec {
                 .unwrap();
 
             (base_range_balance0, base_range_balance1)
-        };
+        } else { (Decimal::one(), Decimal::one()) };
 
-        if !base_factor.is_one() {
+        if !base_factor.is_one() && !balanced_balance0.is_zero() {
+            assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
+            // TODO: Add invariant to check if base range amounts are really in
+            // proportion (ie, `base_range_balance1/base_range_balance0= p`).
+            // Use slippage if needed.
+        }
+
+        // We just checked that if `base_range_balance0` is not zero, neither
+        // `base_range_balance1` will be.
+        if !base_factor.is_one() && !base_range_balance0.is_zero() {
 
             let base_range_tokens = vec![
                 Coin { denom: pool.token0.clone(), amount: raw(&base_range_balance0) },
@@ -595,9 +646,9 @@ mod exec {
 
         if !limit_factor.is_one() {
             let (limit_balance0, limit_balance1) = {
-                // TODO Prove those ops wont overflow.
-                let limit_balance0 = Decimal::new(bal0) - balanced_balance0;
-                let limit_balance1 = Decimal::new(bal1) - balanced_balance1;
+                // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
+                let limit_balance0 = Decimal::new(bal0).checked_sub(balanced_balance0).unwrap();
+                let limit_balance1 = Decimal::new(bal1).checked_sub(balanced_balance1).unwrap();
                 (limit_balance0, limit_balance1)
             };
 
@@ -655,7 +706,11 @@ mod exec {
                     token_min_amount1: "0".into()
                 })
 
-            } else { unreachable!() /* TODO: Prove */ }
+            } else { 
+                // Invariant: Both limit balances cant be zero, or the resutling position
+                //            wouldnt be a limit position.
+                unreachable!()
+            }
         }
 
         // TODO Callbacks and review the whole thing.

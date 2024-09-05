@@ -233,7 +233,7 @@ impl VaultParameters {
             (_, true, _) if !full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
                 reason: "If the vault doenst have a base order, the full range weight should be 1".into()
             }),
-            (false, false, _) if full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
+            (_, false, _) if full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
                 reason: "If the full range weight is 1, the base factor should also be".into()
             }),
             _ => Ok(())
