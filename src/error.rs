@@ -53,8 +53,10 @@ pub enum ContractError {
     DepositedAmontsBelowMin { used: String, wanted: String },
 
     #[error("Invalid shareholder address: {0}")]
-    InvalidShareholderAddress(String)
+    InvalidShareholderAddress(String),
 
-
+    // Rebalance errors.
+    #[error("You cant rebalance a vault without funds")]
+    NothingToRebalance {}
 }
 

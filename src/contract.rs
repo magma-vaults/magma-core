@@ -1,7 +1,6 @@
-use cosmwasm_std::{coins, entry_point, from_binary, from_json, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, Uint128};
+use cosmwasm_std::{coins, entry_point, from_json, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, Uint128};
 use cw20_base::contract::{execute_mint, query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
-use cw_utils::{parse_execute_response_data, parse_reply_execute_data};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 use std::cmp;
 
@@ -290,6 +289,7 @@ mod query {
     }
 }
 
+
 #[entry_point]
 pub fn execute(
     deps: DepsMut,
@@ -502,21 +502,25 @@ mod exec {
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
 
         if bal0.is_zero() && bal1.is_zero() {
-            // TODO: Return custom error: Nothing to rebalance.
+            return Err(ContractError::NothingToRebalance {})
         }
 
         let price = pool_id.price(&deps.querier);
         
         let (balanced_balance0, balanced_balance1) = {
-            // FIXME Those could overflow under extreme conditions, both the
-            // division and the multiplication. Lift to Uint256?
-            
             // Assumption: `price` uses 18 decimals. TODO: Prove it! Wtf is "ToLegacyDec()" in the
             // osmosis codebase.
             // TODO Can we downgrade `price` to Uint128 instead?
             let bal0 = Decimal::new(bal0);
             let bal1 = Decimal::new(bal1);
 
+            // Invariant: Wont overflow.
+            // Proof: Let `x = bal0` and `y = bal1`. Let `p = Y/X = price`. For the first unwrap
+            //        to panic, `p` must be really low, in which case `X` is large and `Y` is
+            //        small, thus token `Y` is more scarce, and so the amount `y` will be
+            //        proportionally lower. The same reasoning applies to the second unwrap.
+            //        If both `Y` and `X` were large, then the price would converge close to `1`,
+            //        making both operations equally safe.
             let balanced0 = bal1.checked_div(price).unwrap();
             let balanced1 = bal0.checked_mul(price).unwrap();
 
@@ -535,9 +539,11 @@ mod exec {
         if balanced_balance0.is_zero() || balanced_balance1.is_zero() {
             assert!(balanced_balance0.is_zero() && balanced_balance1.is_zero());
             assert!(bal0.is_zero() || bal1.is_zero());
-            // TODO: Add invariant to check if balanced amounts are really in
-            // proportion (ie, `balanced_balance1/balanced_balance0 = p`)
-            // Use slippage if needed.
+
+            // We take 1% slippage to check if balances have the right proportion.
+            let balances_price = balanced_balance1 / balanced_balance0;
+            assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
+            assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
         }
 
         let (full_range_balance0, full_range_balance1) = {
@@ -575,20 +581,42 @@ mod exec {
         } else if balanced_balance1.is_zero() || balanced_balance0.is_zero() {
             assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
         } else {
-            assert!(!full_range_balance0.is_zero() && full_range_balance1.is_zero())
-            // TODO: Add invariant to check if full range amounts are really in
-            // proportion (ie, `full_range_balance1/full_range_balance0 = p`).
-            // Use slippage if needed.
+            assert!(!full_range_balance0.is_zero() && full_range_balance1.is_zero());
+
+            // We take 1% slippage to check if balances have the right proportion.
+            let balances_price = full_range_balance1 / full_range_balance0;
+            assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
+            assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
         }
 
-        let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
+        let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
+            // TODO Prove that those unwraps will never fail.
+            let base_range_balance0 = balanced_balance0
+                .checked_sub(full_range_balance0)
+                .unwrap();
 
-        remove_liquidity_msg(PositionType::FullRange, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
-        remove_liquidity_msg(PositionType::Base, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
-        remove_liquidity_msg(PositionType::Limit, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
+            let base_range_balance1 = balanced_balance1
+                .checked_sub(full_range_balance1)
+                .unwrap();
+
+            (base_range_balance0, base_range_balance1)
+        } else { (Decimal::one(), Decimal::one()) };
+
+        if !base_factor.is_one() && !balanced_balance0.is_zero() {
+            assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
+
+            // We take 1% slippage to check if balances have the right proportion.
+            let balances_price = base_range_balance1 / base_range_balance0;
+            assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
+            assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
+        }
+
+        let (limit_balance0, limit_balance1) = {
+            // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
+            let limit_balance0 = Decimal::new(bal0).checked_sub(balanced_balance0).unwrap();
+            let limit_balance1 = Decimal::new(bal1).checked_sub(balanced_balance1).unwrap();
+            (limit_balance0, limit_balance1)
+        };
 
 
         let mut new_position_msgs: Vec<SubMsg> = vec![];
@@ -606,27 +634,6 @@ mod exec {
                 deps,
                 &env
             ), 0))
-        }
-
-
-        let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
-            // TODO Prove that those unwraps will never fail.
-            let base_range_balance0 = balanced_balance0
-                .checked_sub(full_range_balance0)
-                .unwrap();
-
-            let base_range_balance1 = balanced_balance1
-                .checked_sub(full_range_balance1)
-                .unwrap();
-
-            (base_range_balance0, base_range_balance1)
-        } else { (Decimal::one(), Decimal::one()) };
-
-        if !base_factor.is_one() && !balanced_balance0.is_zero() {
-            assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
-            // TODO: Add invariant to check if base range amounts are really in
-            // proportion (ie, `base_range_balance1/base_range_balance0= p`).
-            // Use slippage if needed.
         }
 
         // We just checked that if `base_range_balance0` is not zero, neither
@@ -652,17 +659,10 @@ mod exec {
             ), 1))
         }
 
-        if !limit_factor.is_one() {
-            let (limit_balance0, limit_balance1) = {
-                // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
-                let limit_balance0 = Decimal::new(bal0).checked_sub(balanced_balance0).unwrap();
-                let limit_balance1 = Decimal::new(bal1).checked_sub(balanced_balance1).unwrap();
-                (limit_balance0, limit_balance1)
-            };
+        if !limit_factor.is_one() && (!limit_balance0.is_zero() || !limit_balance1.is_zero()) {
 
             let current_price = pool_id.price(&deps.querier);
             if limit_balance0.is_zero() {
-                // TODO Prove computation security.
                 let lower_price = current_price
                     .checked_div(current_price)
                     .unwrap_or(Decimal::MIN);
@@ -676,7 +676,6 @@ mod exec {
                     &env
                 ), 2))
             } else if limit_balance1.is_zero() {
-                // TODO Prove computation security.
                 let upper_price = current_price
                     .checked_mul(current_price)
                     .unwrap_or(Decimal::MIN);
@@ -690,11 +689,20 @@ mod exec {
                     &env
                 ), 2))
             } else { 
-                // Invariant: Both limit balances cant be zero, or the resutling position
+                // Invariant: Both limit balances cant be non zero, or the resutling position
                 //            wouldnt be a limit position.
                 unreachable!()
             }
         }
+
+        let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
+
+        remove_liquidity_msg(PositionType::FullRange, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
+        remove_liquidity_msg(PositionType::Base, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
+        remove_liquidity_msg(PositionType::Limit, deps, &env)
+            .map(|msg| liquidity_removal_msgs.push(msg));
 
         // TODO Callbacks and review the whole thing.
         Ok(Response::new()
@@ -723,3 +731,4 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
     // TODO Add attributes?
     Ok(Response::new())
 }
+

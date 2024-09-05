@@ -129,7 +129,7 @@ impl PoolId {
         (MAX_TICK/spacing) * spacing
     }
 
-    // TODO Unsafe operations to prove here.
+    // TODO Unsafe operations to prove here. TODO Prove function semantics.
     pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
         let lower = (value/spacing) * spacing;
