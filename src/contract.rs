@@ -6,13 +6,14 @@ use cw20_base::contract::query_balance;
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 use std::cmp;
+use crate::error::ContractError;
+
 
 use crate::msg::{
     CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, QueryMsg,
     VaultBalancesResponse,
 };
 use crate::{
-    error::ContractError,
     msg::{ExecuteMsg, InstantiateMsg},
     state::{VaultInfo, VaultParameters, VaultState, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE},
 };
@@ -85,10 +86,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
 mod query {
     use std::str::FromStr;
 
-    use osmosis_std::types::{
-        cosmos::bank::v1beta1::BankQuerier,
-        osmosis::concentratedliquidity::v1beta1::PositionByIdRequest,
-    };
+    use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::PositionByIdRequest;
 
     use cosmwasm_std::Uint256;
 
@@ -108,9 +106,19 @@ mod query {
             .pool_id
             .denoms(&deps.querier);
 
-        let balances = BankQuerier::new(&deps.querier);
-        let contract_addr = env.contract.address.to_string();
-
+        let balances = deps
+            .querier
+            .query_all_balances(env.contract.address.clone())?;
+        let contract_balance0 = balances
+            .iter()
+            .find(|c| c.denom == denom0)
+            .map(|c| c.amount)
+            .unwrap_or_default();
+        let contract_balance1 = balances
+            .iter()
+            .find(|c| c.denom == denom1)
+            .map(|c| c.amount)
+            .unwrap_or_default();
         // Invariant: Wont return `None` becuase we verify the pool and
         //            denoms are proper during instantiation.
         let contract_balance0 = balances
@@ -190,10 +198,9 @@ mod query {
         // Invariant: We verified `id` is a valid position id the moment
         //            we put it in the state, so the query wont fail.
         let pos = PositionByIdRequest { position_id: id }
-            .query(&deps.querier)
-            .unwrap()
-            .position
-            .unwrap();
+        .query(&deps.querier.as_ref())
+        .unwrap()
+        .position
 
         // Invariant: If position is valid, both assets will be always present.
         let asset0 = pos.asset0.unwrap();
@@ -389,7 +396,7 @@ mod exec {
     use crate::error::ContractError;
     use crate::msg::{CalcSharesAndUsableAmountsResponse, DepositMsg};
     use crate::state::{BLACKLISTED_ADDRESSES, TOKEN_INFO, VAULT_INFO};
-    use cosmwasm_std::{BankMsg, Coin, Decimal, Uint128, Uint256};
+    use cosmwasm_std::{BankMsg, Coin, Decimal, Uint128};
     use cw_utils::must_pay;
 
     pub fn deposit(
@@ -938,7 +945,10 @@ mod exec {
 // TODO: Prove all unwraps security.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
-    let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
+    let response_data = msg.result.unwrap().msg_responses.get(0).cloned()
+        .or_else(|| msg.result.unwrap().data)
+        .ok_or_else(|| ContractError::NoResponseData)?;
+    let new_position: MsgCreatePositionResponse = response_data.try_into().unwrap();
     let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
 
     match msg.id {

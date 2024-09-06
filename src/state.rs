@@ -102,7 +102,7 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
 #[readonly::make]
 pub struct PoolId(pub u64);
 impl PoolId {
-    pub fn new(pool_id: u64, querier: &QuerierWrapper) -> Option<Self> {
+    pub fn new(pool_id: u64, querier: &QuerierWrapper<'_>) -> Option<Self> {
         let querier = PoolmanagerQuerier::new(querier);
         let encoded_pool = querier.pool(pool_id).ok()?.pool?;
         // The pool could only not be deserialized if `pool_id`
@@ -202,7 +202,7 @@ impl PriceFactor {
     }
 
     // What even was this?
-    pub fn mul_or_max(&self, price: &Decimal) -> Decimal {
+    pub fn mul_or_max(&self) -> Decimal {
         unimplemented!()
     }
 }

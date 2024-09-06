@@ -4,6 +4,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
+    #[error("No response data")]
+    NoResponseData,
+
     #[error("{0}")]
     Std(#[from] StdError),
 
@@ -18,6 +21,9 @@ pub enum ContractError {
 
     #[error("Contract address not allowed: {0}")]
     ContractAddressNotAllowed(String),
+
+    #[error("Deposited amounts below minimum: used {used}, wanted {wanted}")]
+    DepositedAmountsBelowMin { used: String, wanted: String },
 
     // #[error("Invalid deposit")]
     // InvalidDeposit {},
