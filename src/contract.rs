@@ -310,7 +310,7 @@ pub fn execute(
 
 mod exec {
 
-    use cosmwasm_std::{BankMsg, Coin, Uint128, Uint256, Decimal};
+    use cosmwasm_std::{Uint128, Decimal};
     use cw_utils::must_pay;
     use crate::state::{VAULT_INFO, BLACKLISTED_ADDRESSES, TOKEN_INFO};
     use crate::error::ContractError;
