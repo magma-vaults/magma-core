@@ -27,9 +27,6 @@ def osmo_p_inv(p: float) -> int | None:
     z = floor(log10(p))
     return round(10**(6-z)*(p + (9*z - 1)*10**z))
 
-p0 = 27500.0
-print(osmo_p_inv(p0))
-
 def test_inv():
     osmo_p_inv_test_cases = {
         0.099998: -9000200,
