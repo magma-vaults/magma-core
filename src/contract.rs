@@ -310,7 +310,7 @@ pub fn execute(
 
 mod exec {
 
-    use cosmwasm_std::{Uint128, Decimal};
+    use cosmwasm_std::{BankMsg, Coin, Uint128, Uint256, Decimal};
     use cw_utils::must_pay;
     use crate::state::{VAULT_INFO, BLACKLISTED_ADDRESSES, TOKEN_INFO};
     use crate::error::ContractError;
@@ -373,7 +373,63 @@ mod exec {
                 wanted: format!("({}, {})", amount0_min, amount1_min)
             });
         }
-
+    
+        // Mint shares
+        execute_mint(deps, env.clone(), info.clone(), recipient.to_string(), shares)?;
+    
+        // Calculate refund amounts
+        let refund0 = amount0.checked_sub(usable_amount0)?;
+        let refund1 = amount1.checked_sub(usable_amount1)?;
+    
+        // Prepare response
+        let mut response = Response::new()
+            .add_attribute("action", "deposit")
+            .add_attribute("to", recipient.to_string())
+            .add_attribute("shares", shares.to_string())
+            .add_attribute("amount0_deposited", usable_amount0.to_string())
+            .add_attribute("amount1_deposited", usable_amount1.to_string());
+    
+        // Refund unused amounts
+        if !refund0.is_zero() {
+            response = response.add_message(BankMsg::Send {
+                to_address: info.sender.to_string(),
+                amount: vec![Coin::new(refund0.u128(), denom0)],
+            });
+        }
+        if !refund1.is_zero() {
+            response = response.add_message(BankMsg::Send {
+                to_address: info.sender.to_string(),
+                amount: vec![Coin::new(refund1.u128(), denom1)],
+            });
+        }
+    
+        Ok(response)
+    }
+    
+    fn execute_mint(
+        deps: DepsMut,
+        env: Env,
+        info: MessageInfo,
+        recipient: String,
+        amount: Uint128,
+    ) -> Result<(), ContractError> {
+        // Load token info
+        let mut token_info = TOKEN_INFO.load(deps.storage)?;
+    
+        // Check minting permissions
+        if token_info.mint.as_ref().map_or(false, |m| m.minter != env.contract.address) {
+            return Err(ContractError::Unauthorized {});
+        }
+    
+        // Update total supply
+        token_info.total_supply = token_info.total_supply.checked_add(amount)?;
+        TOKEN_INFO.save(deps.storage, &token_info)?;
+    
+        // Mint tokens to recipient
+        let rcpt_addr = deps.api.addr_validate(&recipient)?;
+        cw20_base::contract::execute_mint(deps, env, info, rcpt_addr.to_string(), amount)?;
+    
+        Ok(())
     }
 
     pub fn remove_liquidity_msg(for_position: PositionType, deps: Deps, env: &Env) -> Option<MsgWithdrawPosition> {
