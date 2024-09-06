@@ -1,5 +1,5 @@
-use cosmwasm_std::{coins, entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult, Uint128};
-use cw20_base::contract::{execute_mint, query_balance};
+use cosmwasm_std::{entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult, Uint128};
+use cw20_base::contract::{query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 use std::cmp;
