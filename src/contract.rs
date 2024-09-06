@@ -440,8 +440,6 @@ mod exec {
             .atomics()
             .to_string();
 
-        // panic!("LIQ TO REMOVE!!: {}", position_liquidity);
-
         // TODO Also have to claim spread factor manually.
         Some(MsgWithdrawPosition {
             position_id,
@@ -629,6 +627,7 @@ mod exec {
         };
 
 
+        let mut res: Response = Response::new();
         let mut new_position_msgs: Vec<SubMsg> = vec![];
 
         // If `full_range_balance0` is not zero, we already checked that neither
@@ -636,9 +635,20 @@ mod exec {
         // the vault only holds tokens for limit orders for now, or that
         // the vault simply has zero `full_range_weight`.
         if !full_range_weight.is_zero() && !full_range_balance0.is_zero() {
+
+            let lower_tick = pool_id.min_valid_tick(&deps.querier);
+            let upper_tick = pool_id.max_valid_tick(&deps.querier);
+
+            res = res
+                .add_attribute("action", "create_full_range_position")
+                .add_attribute("lower_tick", lower_tick.to_string())
+                .add_attribute("upper_tick", upper_tick.to_string())
+                .add_attribute("amount0", full_range_balance0.to_string())
+                .add_attribute("amount1", full_range_balance1.to_string());
+
             new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
-                pool_id.min_valid_tick(&deps.querier),
-                pool_id.max_valid_tick(&deps.querier),
+                lower_tick,
+                upper_tick,
                 full_range_balance0,
                 full_range_balance1,
                 deps,
@@ -659,9 +669,19 @@ mod exec {
                 .checked_mul(base_factor.0)
                 .unwrap_or(Decimal::MAX);
 
+            let lower_tick = price_function_inv(&lower_price);
+            let upper_tick = price_function_inv(&upper_price);
+            
+            res = res
+                .add_attribute("action", "create_base_position")
+                .add_attribute("lower_tick", lower_tick.to_string())
+                .add_attribute("upper_tick", upper_tick.to_string())
+                .add_attribute("amount0", base_range_balance0.to_string())
+                .add_attribute("amount1", base_range_balance1.to_string());
+
             new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
-                price_function_inv(&lower_price),
-                price_function_inv(&upper_price),
+                lower_tick,
+                upper_tick,
                 base_range_balance0,
                 base_range_balance1,
                 deps,
@@ -677,14 +697,23 @@ mod exec {
                     .checked_div(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
+                let lower_tick = price_function_inv(&lower_price);
+
                 // Invariant: Ticks nor Ticks spacings will never be large enough to
                 //            overflow out of `i32`.
                 let upper_tick = pool_id.current_tick(&deps.querier)
                     .checked_sub(pool_id.tick_spacing(&deps.querier))
                     .unwrap();
 
+                res = res
+                    .add_attribute("action", "create_limit_position")
+                    .add_attribute("lower_tick", lower_tick.to_string())
+                    .add_attribute("upper_tick", upper_tick.to_string())
+                    .add_attribute("amount0", limit_balance0.to_string())
+                    .add_attribute("amount1", limit_balance1.to_string());
+
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
-                    price_function_inv(&lower_price),
+                    lower_tick,
                     upper_tick,
                     Decimal::zero(),
                     limit_balance1,
@@ -696,15 +725,24 @@ mod exec {
                     .checked_mul(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
+                let upper_tick = price_function_inv(&upper_price);
+
                 // Invariant: Ticks nor Ticks spacings will never be large enough to
                 //            overflow out of `i32`.
                 let lower_tick = pool_id.current_tick(&deps.querier)
                     .checked_add(pool_id.tick_spacing(&deps.querier))
                     .unwrap();
 
+                res = res
+                    .add_attribute("action", "create_limit_position")
+                    .add_attribute("lower_tick", lower_tick.to_string())
+                    .add_attribute("upper_tick", upper_tick.to_string())
+                    .add_attribute("amount0", limit_balance0.to_string())
+                    .add_attribute("amount1", limit_balance1.to_string());
+
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     lower_tick,
-                    price_function_inv(&upper_price),
+                    upper_tick,
                     limit_balance0,
                     Decimal::zero(),
                     deps,
@@ -734,7 +772,7 @@ mod exec {
             position_ids, sender: env.contract.address.into()
         };
 
-        Ok(Response::new()
+        Ok(res
             .add_message(rewards_claim_msg)
             .add_messages(liquidity_removal_msgs)
             .add_submessages(new_position_msgs)
@@ -771,7 +809,7 @@ mod test {
     use cosmwasm_std::{Coin, Decimal};
     use osmosis_std::types::osmosis::{
         concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PositionByIdRequest
+            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord
         }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}
     ;
     use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
@@ -1080,50 +1118,6 @@ mod test {
         wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
             .unwrap();
 
-        let positions: VaultState = wasm
-            .query(&vault_addr.0, &QueryMsg::VaultPositions {})
-            .unwrap();
-
-        println!("State: {:?}", positions);
-        let cl = ConcentratedLiquidity::new(&pool_info.app);
-
-        let positions_query = |positions: &VaultState| {
-            let full = cl.query_position_by_id(&PositionByIdRequest { 
-                position_id: positions.full_range_position_id.unwrap()
-            }).unwrap().position.unwrap();
-
-            let base = cl.query_position_by_id(&PositionByIdRequest { 
-                position_id: positions.base_position_id.unwrap()
-            }).unwrap().position.unwrap();
-
-            let limit = cl.query_position_by_id(&PositionByIdRequest { 
-                position_id: positions.limit_position_id.unwrap()
-            }).unwrap().position.unwrap();
-
-            (full, base, limit)
-        };
-        
-        let position_balances = || {
-            let positions: VaultState = wasm
-                .query(&vault_addr.0, &QueryMsg::VaultPositions {})
-                .unwrap();
-
-            let (full, base, limit) = positions_query(&positions);
-            (
-                (full.asset0.unwrap(), full.asset1.unwrap()),
-                (base.asset0.unwrap(), base.asset1.unwrap()),
-                (limit.asset0.unwrap(), limit.asset1.unwrap())
-            )
-        };
-
-        let vault_balances = || -> VaultBalancesResponse {
-            wasm.query(&vault_addr.0, &QueryMsg::VaultBalances {}).unwrap()
-        };
-
-        println!("Bals after 1st rebalance: {:?}", position_balances());
-        println!("Computed by contract as: {:?}", vault_balances());
-        println!("-------------------------------------------------------------");
-
         let pm = PoolManager::new(&pool_info.app);
         let usdc_got = pm.swap_exact_amount_in(
             MsgSwapExactAmountIn {
@@ -1136,18 +1130,9 @@ mod test {
             }, &pool_info.deployer
         ).unwrap().data.token_out_amount;
         let usdc_got = Uint128::from_str(&usdc_got).unwrap();
-        println!("USDC GOT: {}", usdc_got);
-
-        println!("Bals after 1st swap: {:?}", position_balances());
-        println!("Computed by contract as: {:?}", vault_balances());
-        println!("---------------------------------------------------------");
 
         wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
             .unwrap();
-
-        println!("Bals after 2nd rebalance: {:?}", position_balances());
-        println!("Computed by contract as: {:?}", vault_balances());
-        println!("---------------------------------------------------------");
 
         pm.swap_exact_amount_in(
             MsgSwapExactAmountIn {
@@ -1159,10 +1144,6 @@ mod test {
                 token_out_min_amount: "1".into()
             }, &pool_info.deployer
         ).unwrap();
-
-        println!("Bals after 2nd swap: {:?}", position_balances());
-        println!("Computed by contract as: {:?}", vault_balances());
-        println!("---------------------------------------------------------");
 
         wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
             .unwrap();
