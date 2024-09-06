@@ -56,7 +56,7 @@ impl PositiveDecimal {
 pub fn price_function_inv(p: &Decimal) -> i32 {
 
     let maybe_neg_pow = |exp: i32| {
-        let ten = SignedDecimal256::new(10.into());
+        let ten = SignedDecimal256::from_str("10").unwrap();
         if exp >= 0 {
             // Invariant: We just verified that `exp` is unsigned.
             let exp: u32 = exp.try_into().unwrap();
@@ -73,7 +73,7 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
         let x = floor_log_p.checked_mul(9)?.checked_sub(1)?;
 
         let x = maybe_neg_pow(floor_log_p)?
-            .checked_mul(SignedDecimal256::new(x.into())).ok()?
+            .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?).ok()?
             .checked_add(p.clone().try_into().ok()?).ok()?;
 
         let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
@@ -110,7 +110,7 @@ impl PoolId {
         self.to_pool(querier).current_tick as i32
     }
 
-    fn tick_spacing(&self, querier: &QuerierWrapper) -> i32 {
+    pub fn tick_spacing(&self, querier: &QuerierWrapper) -> i32 {
         // TODO: Use safe conversions.
         // Invariant: Wont overflow under reasonable conditions.
         self.to_pool(querier).tick_spacing as i32

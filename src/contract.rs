@@ -1,4 +1,4 @@
-use cosmwasm_std::{coins, entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdError, StdResult, SubMsgResult, Uint128, WasmMsg};
+use cosmwasm_std::{coins, entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult, Uint128};
 use cw20_base::contract::{execute_mint, query_balance};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
@@ -460,7 +460,7 @@ mod exec {
         let tokens_provided = vec![
             Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
             Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) }
-        ];
+        ].into_iter().filter(|c| c.amount != "0").collect();
 
         let lower_tick = pool_id.closest_valid_tick(lower_tick, &deps.querier).into();
         let upper_tick = pool_id.closest_valid_tick(upper_tick, &deps.querier).into();
@@ -480,6 +480,7 @@ mod exec {
         }
     }
 
+    // TODO Add attributes to Response to emit an event with info about the new positions.
     // TODO Finish cleanup.
     pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
@@ -533,11 +534,14 @@ mod exec {
         if balanced_balance0.is_zero() || balanced_balance1.is_zero() {
             assert!(balanced_balance0.is_zero() && balanced_balance1.is_zero());
             assert!(bal0.is_zero() || bal1.is_zero());
+        } else {
+            assert!(!balanced_balance0.is_zero() && !balanced_balance1.is_zero());
+            assert!(!bal0.is_zero() && !bal1.is_zero());
 
             // We take 1% slippage to check if balances have the right proportion.
             let balances_price = balanced_balance1 / balanced_balance0;
             assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
-            assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
+            assert!(balances_price <= price * Decimal::from_str("1.01").unwrap());
         }
 
         let (full_range_balance0, full_range_balance1) = {
@@ -661,7 +665,7 @@ mod exec {
                     .checked_div(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(SubMsg::reply_always(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     price_function_inv(&lower_price),
                     pool_id.current_tick(&deps.querier),
                     Decimal::zero(),
@@ -674,7 +678,7 @@ mod exec {
                     .checked_mul(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
-                new_position_msgs.push(SubMsg::reply_always(create_position_msg(
+                new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     pool_id.current_tick(&deps.querier),
                     price_function_inv(&upper_price),
                     limit_balance0,
@@ -726,14 +730,6 @@ mod exec {
 // TODO: Prove all unwraps security.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
-
-    if msg.id == 2 { panic!("solved") }
-    
-    // match msg.result {
-    //     SubMsgResult::Err(err) => panic!("Err: {:?}, Id: {}", err, msg.id),
-    //     SubMsgResult::Ok(_) => {}
-    // };
-
     let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
 
     let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
@@ -751,15 +747,14 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 
 #[cfg(test)]
 mod test {
-    use core::panic;
     use std::str::FromStr;
 
-    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}, state::{price_function_inv, PoolId}};
+    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}, state::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{Coin, Decimal};
-    use osmosis_std::types::{cosmos::base::query::v1beta1::PageRequest, osmosis::{concentratedliquidity::{poolmodel::concentrated::v1beta1::MsgCreateConcentratedPool, v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PoolsRequest}}, poolmanager::v1beta1::{PoolRequest, SpotPriceRequest}}};
-    use osmosis_test_tube::{cosmrs::bip32::secp256k1::sha2::digest::block_buffer::LazyBuffer, Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
+    use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord};
+    use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, SigningAccount, Wasm};
 
     struct PoolMockupInfo {
         pool_balance0: u128,
@@ -839,27 +834,41 @@ mod test {
 
     #[test]
     fn price_function_inv_test() {
-        let PoolMockupInfo { pool_id, app, .. } = create_basic_usdc_osmo_pool();
-        let pm = PoolManager::new(&app);
-        let p = pm.query_spot_price(&SpotPriceRequest { 
-            pool_id, 
-            base_asset_denom: USDC_DENOM.into(),
-            quote_asset_denom: OSMO_DENOM.into()
-        }).unwrap().spot_price;
-        let p = Decimal::from_str(&p).unwrap();
+        let prices = &[
+            Decimal::from_str("0.099998").unwrap(),
+            Decimal::from_str("0.099999").unwrap(),
+            Decimal::from_str("0.94998").unwrap(),
+            Decimal::from_str("0.94999").unwrap(),
+            Decimal::from_str("0.99998").unwrap(),
+            Decimal::from_str("0.99999").unwrap(),
+            Decimal::from_str("1").unwrap(),
+            Decimal::from_str("1.0001").unwrap(),
+            Decimal::from_str("1.0002").unwrap(),
+            Decimal::from_str("9.9999").unwrap(),
+            Decimal::from_str("10.001").unwrap(),
+            Decimal::from_str("10.002").unwrap()
+        ];
 
-        let base_factor = Decimal::from_str("2").unwrap();
-        let lower_price = p / base_factor;
-        let upper_price = p * base_factor;
+        let ticks = &[
+            -9000200,
+            -9000100,
+            -500200,
+            -500100,
+            -200,
+            -100,
+            0,
+            100,
+            200,
+            8999900,
+            9000100,
+            9000200
+        ];
 
-        let lower_tick = price_function_inv(&lower_price);
-        let upper_tick = price_function_inv(&upper_price);
-
-        // FIXME 
-        assert!(lower_tick != 0 && upper_tick != 0 && upper_tick > lower_tick);
-        panic!("Lower = {}, Upper = {}", lower_tick, upper_tick);
+        for (p, expected_tick) in prices.iter().zip(ticks.iter()) {
+            let got_tick = price_function_inv(p);
+            assert_eq!(*expected_tick, got_tick)
+        }
     }
-
 
     #[test]
     fn normal_rebalance() {
@@ -904,7 +913,209 @@ mod test {
             &deployer
         ).unwrap();
 
-        let res = wasm.execute(
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Rebalance {},
+            &[],
+            &deployer
+        ).unwrap();
+    }
+
+    #[test]
+    fn normal_rebalance_dual() {
+        let PoolMockupInfo { pool_id, app, deployer, .. } = create_basic_usdc_osmo_pool();
+        
+        // Vault setup.
+        let wasm = Wasm::new(&app);
+        let code_id = store_vaults_code(&wasm, &deployer);
+
+        let vault_addr = wasm.instantiate(
+            code_id,
+            &InstantiateMsg {
+                vault_info: VaultInfoInstantiateMsg {
+                    pool_id,
+                    vault_name: "My USDC/OSMO vault".into(),
+                    vault_symbol: "USDCOSMOV".into(),
+                    admin: Some(deployer.address()),
+                    rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                },
+                vault_parameters: VaultParametersInstantiateMsg {
+                    base_factor: "2".into(),
+                    limit_factor: "1.45".into(),
+                    full_range_weight: "0.55".into()
+                }
+            },
+            None, Some("my vault"), &[], &deployer
+        ).unwrap().data.address;
+        
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(1_500),
+                amount1: Uint128::new(1_000),
+                amount0_min: Uint128::new(1_500),
+                amount1_min: Uint128::new(1_000),
+                to: deployer.address()
+            }),
+            &[
+                Coin::new(1_500, USDC_DENOM).into(),
+                Coin::new(1_000, OSMO_DENOM).into()
+            ],
+            &deployer
+        ).unwrap();
+
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Rebalance {},
+            &[],
+            &deployer
+        ).unwrap();
+    }
+
+    #[test]
+    fn rebalance_in_proportion() {
+        let PoolMockupInfo { pool_id, app, deployer, pool_balance0, pool_balance1 } = create_basic_usdc_osmo_pool();
+        
+        // Vault setup.
+        let wasm = Wasm::new(&app);
+        let code_id = store_vaults_code(&wasm, &deployer);
+
+        let vault_addr = wasm.instantiate(
+            code_id,
+            &InstantiateMsg {
+                vault_info: VaultInfoInstantiateMsg {
+                    pool_id,
+                    vault_name: "My USDC/OSMO vault".into(),
+                    vault_symbol: "USDCOSMOV".into(),
+                    admin: Some(deployer.address()),
+                    rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                },
+                vault_parameters: VaultParametersInstantiateMsg {
+                    base_factor: "2".into(),
+                    limit_factor: "1.45".into(),
+                    full_range_weight: "0.55".into()
+                }
+            },
+            None, Some("my vault"), &[], &deployer
+        ).unwrap().data.address;
+        
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(pool_balance0/2),
+                amount1: Uint128::new(pool_balance1/2),
+                amount0_min: Uint128::new(pool_balance0/2),
+                amount1_min: Uint128::new(pool_balance1/2),
+                to: deployer.address()
+            }),
+            &[
+                Coin::new(pool_balance0/2, USDC_DENOM).into(),
+                Coin::new(pool_balance1/2, OSMO_DENOM).into()
+            ],
+            &deployer
+        ).unwrap();
+
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Rebalance {},
+            &[],
+            &deployer
+        ).unwrap();
+    }
+
+    #[test]
+    fn only_limit_rebalance() {
+        let PoolMockupInfo { pool_id, app, deployer, .. } = create_basic_usdc_osmo_pool();
+        
+        // Vault setup.
+        let wasm = Wasm::new(&app);
+        let code_id = store_vaults_code(&wasm, &deployer);
+
+        let vault_addr = wasm.instantiate(
+            code_id,
+            &InstantiateMsg {
+                vault_info: VaultInfoInstantiateMsg {
+                    pool_id,
+                    vault_name: "My USDC/OSMO vault".into(),
+                    vault_symbol: "USDCOSMOV".into(),
+                    admin: Some(deployer.address()),
+                    rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                },
+                vault_parameters: VaultParametersInstantiateMsg {
+                    base_factor: "2".into(),
+                    limit_factor: "1.45".into(),
+                    full_range_weight: "0.55".into()
+                }
+            },
+            None, Some("my vault"), &[], &deployer
+        ).unwrap().data.address;
+        
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(42),
+                amount1: Uint128::new(0),
+                amount0_min: Uint128::new(42),
+                amount1_min: Uint128::new(0),
+                to: deployer.address()
+            }),
+            &[
+                Coin::new(42, USDC_DENOM).into()
+            ],
+            &deployer
+        ).unwrap();
+
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Rebalance {},
+            &[],
+            &deployer
+        ).unwrap();
+    }
+
+    #[test]
+    fn only_limit_rebalance_dual() {
+        let PoolMockupInfo { pool_id, app, deployer, .. } = create_basic_usdc_osmo_pool();
+        
+        // Vault setup.
+        let wasm = Wasm::new(&app);
+        let code_id = store_vaults_code(&wasm, &deployer);
+
+        let vault_addr = wasm.instantiate(
+            code_id,
+            &InstantiateMsg {
+                vault_info: VaultInfoInstantiateMsg {
+                    pool_id,
+                    vault_name: "My USDC/OSMO vault".into(),
+                    vault_symbol: "USDCOSMOV".into(),
+                    admin: Some(deployer.address()),
+                    rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                },
+                vault_parameters: VaultParametersInstantiateMsg {
+                    base_factor: "2".into(),
+                    limit_factor: "1.45".into(),
+                    full_range_weight: "0.55".into()
+                }
+            },
+            None, Some("my vault"), &[], &deployer
+        ).unwrap().data.address;
+        
+        wasm.execute(
+            &vault_addr,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(0),
+                amount1: Uint128::new(42),
+                amount0_min: Uint128::new(0),
+                amount1_min: Uint128::new(42),
+                to: deployer.address()
+            }),
+            &[
+                Coin::new(42, OSMO_DENOM).into()
+            ],
+            &deployer
+        ).unwrap();
+
+        wasm.execute(
             &vault_addr,
             &ExecuteMsg::Rebalance {},
             &[],

@@ -27,27 +27,30 @@ def osmo_p_inv(p: float) -> int | None:
     z = floor(log10(p))
     return round(10**(6-z)*(p + (9*z - 1)*10**z))
 
+p0 = 27500.0
+print(osmo_p_inv(p0))
 
-osmo_p_inv_test_cases = {
-    0.099998: -9000200,
-    0.099999: -9000100,
-    0.94998: -500200,
-    0.94999: -500100,
-    0.99998: -200,
-    0.99999: -100,
-    1: 0,
-    1.0001: 100,
-    1.0002: 200,
-    9.9999: 8999900,
-    10.001: 9000100,
-    10.002: 9000200
-}
+def test_inv():
+    osmo_p_inv_test_cases = {
+        0.099998: -9000200,
+        0.099999: -9000100,
+        0.94998: -500200,
+        0.94999: -500100,
+        0.99998: -200,
+        0.99999: -100,
+        1: 0,
+        1.0001: 100,
+        1.0002: 200,
+        9.9999: 8999900,
+        10.001: 9000100,
+        10.002: 9000200
+    }
 
-for k, v in osmo_p_inv_test_cases.items():
-    inv = osmo_p_inv(k)
-    assert inv is not None and inv == v
-    invinv = round(osmo_p(inv), len(str(k)))
-    assert invinv == k
+    for k, v in osmo_p_inv_test_cases.items():
+        inv = osmo_p_inv(k)
+        assert inv is not None and inv == v
+        invinv = round(osmo_p(inv), len(str(k)))
+        assert invinv == k
 
 def plot_prices():
     plt.subplot(1, 2, 1)
