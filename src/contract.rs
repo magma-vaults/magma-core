@@ -412,7 +412,6 @@ mod exec {
         Ok(res)
     }
 
-    // TODO Better return type. TODO hmmmm think of the messages structure.
     pub fn remove_liquidity_msg(for_position: PositionType, deps: Deps, env: &Env) -> Option<MsgWithdrawPosition> {
         // Invariant: After instantiation, `VAULT_STATE` is always present.
         let VaultState { 
@@ -436,8 +435,13 @@ mod exec {
             .position.unwrap()
             .liquidity;
 
-        // USE THIS!! (3 different ids). https://github.com/CosmWasm/cosmwasm/blob/main/SEMANTICS.md#handling-the-reply
-        // Response::new().add_submessage(SubMsg::reply_on_success(msg, id));
+        let position_liquidity = Decimal::from_str(&position_liquidity)
+            .unwrap()
+            .atomics()
+            .to_string();
+
+        // panic!("LIQ TO REMOVE!!: {}", position_liquidity);
+
         // TODO Also have to claim spread factor manually.
         Some(MsgWithdrawPosition {
             position_id,
@@ -499,6 +503,10 @@ mod exec {
         } = VAULT_PARAMETERS.load(deps.storage).unwrap();
 
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
+        // NOTE: We remove 3 tokens from each balance to prevent dust errors. Ie,
+        //       position withdrawals always leave 1 token behind.
+        let bal0 = bal0.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
+        let bal1 = bal1.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
 
         if bal0.is_zero() && bal1.is_zero() {
             return Err(ContractError::NothingToRebalance {})
@@ -669,9 +677,15 @@ mod exec {
                     .checked_div(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
+                // Invariant: Ticks nor Ticks spacings will never be large enough to
+                //            overflow out of `i32`.
+                let upper_tick = pool_id.current_tick(&deps.querier)
+                    .checked_sub(pool_id.tick_spacing(&deps.querier))
+                    .unwrap();
+
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     price_function_inv(&lower_price),
-                    pool_id.current_tick(&deps.querier),
+                    upper_tick,
                     Decimal::zero(),
                     limit_balance1,
                     deps,
@@ -682,8 +696,14 @@ mod exec {
                     .checked_mul(limit_factor.0)
                     .unwrap_or(Decimal::MIN);
 
+                // Invariant: Ticks nor Ticks spacings will never be large enough to
+                //            overflow out of `i32`.
+                let lower_tick = pool_id.current_tick(&deps.querier)
+                    .checked_add(pool_id.tick_spacing(&deps.querier))
+                    .unwrap();
+
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
-                    pool_id.current_tick(&deps.querier),
+                    lower_tick,
                     price_function_inv(&upper_price),
                     limit_balance0,
                     Decimal::zero(),
@@ -697,32 +717,23 @@ mod exec {
             }
         }
 
-        let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
+         let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
 
-        remove_liquidity_msg(PositionType::FullRange, deps, &env)
+         remove_liquidity_msg(PositionType::FullRange, deps, &env)
+             .map(|msg| liquidity_removal_msgs.push(msg));
+         remove_liquidity_msg(PositionType::Base, deps, &env)
             .map(|msg| liquidity_removal_msgs.push(msg));
-        remove_liquidity_msg(PositionType::Base, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
-        remove_liquidity_msg(PositionType::Limit, deps, &env)
+         remove_liquidity_msg(PositionType::Limit, deps, &env)
             .map(|msg| liquidity_removal_msgs.push(msg));
 
-        
-        // Invariant: State is always present after instantiation.
-        let ids = VAULT_STATE.load(deps.storage).unwrap();
-        let ids_to_claim: Vec<u64> = vec![
-            ids.full_range_position_id,
-            ids.base_position_id,
-            ids.limit_position_id
-        ].into_iter().filter_map(|id| id).collect();
-
-        // TODO Will it crash if `ids_to_claim.is_empty()`?
         // TODO Add callback for protocol fees and manager fees.
+        let position_ids = liquidity_removal_msgs
+            .iter().map(|msg| msg.position_id).collect();
+
         let rewards_claim_msg = MsgCollectSpreadRewards {
-            position_ids: ids_to_claim,
-            sender: env.contract.address.into()
+            position_ids, sender: env.contract.address.into()
         };
-        
-        // TODO Callbacks and review the whole thing.
+
         Ok(Response::new()
             .add_message(rewards_claim_msg)
             .add_messages(liquidity_removal_msgs)
@@ -734,9 +745,10 @@ mod exec {
 // TODO: Prove all unwraps security.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
-    let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
 
+    let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
     let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
+
     match msg.id {
         0 => { vault_state.full_range_position_id = Some(new_position.position_id) },
         1 => { vault_state.base_position_id = Some(new_position.position_id) },
@@ -759,14 +771,12 @@ mod test {
     use cosmwasm_std::{Coin, Decimal};
     use osmosis_std::types::osmosis::{
         concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, Pool, PoolRecord, PositionByIdRequest
-        }, poolmanager::v1beta1::PoolRequest
-    };
+            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PositionByIdRequest
+        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}
+    ;
     use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
     struct PoolMockupInfo {
-        pool_balance0: u128,
-        pool_balance1: u128,
         pool_id: u64,
         app: OsmosisTestApp,
         deployer: SigningAccount,
@@ -776,7 +786,7 @@ mod test {
     const USDC_DENOM: &str = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
     const OSMO_DENOM: &str = "uosmo";
 
-    fn create_basic_usdc_osmo_pool() -> PoolMockupInfo {
+    fn create_basic_usdc_osmo_pool(x_bal: u128, y_bal: u128) -> PoolMockupInfo {
         let app = OsmosisTestApp::new();
         let deployer = app.init_account(&[
             Coin::new(1_000_000_000_000u128, USDC_DENOM),
@@ -796,15 +806,12 @@ mod test {
                     denom0: USDC_DENOM.into(),
                     denom1: OSMO_DENOM.into(),
                     tick_spacing: 100,
-                    spread_factor: "10".into()
+                    spread_factor: "0".into()
                 }]
             },
             deployer.address(),
             &deployer
         ).unwrap();
-        
-        let pool_x = 100_000;
-        let pool_y = 200_000;
         let pool_id = 1;
 
         let position_res = cl.create_position(MsgCreatePosition {
@@ -813,21 +820,20 @@ mod test {
             lower_tick: MIN_TICK.into(),
             upper_tick: MAX_TICK.into(),
             tokens_provided: vec![
-                Coin::new(pool_x, USDC_DENOM).into(),
-                Coin::new(pool_y, OSMO_DENOM).into()
+                Coin::new(x_bal, USDC_DENOM).into(),
+                Coin::new(y_bal, OSMO_DENOM).into()
             ],
-            token_min_amount0: pool_x.to_string(),
-            token_min_amount1: pool_y.to_string()
+            token_min_amount0: x_bal.to_string(),
+            token_min_amount1: y_bal.to_string()
         }, &deployer).unwrap().data;
 
         assert_eq!(position_res.position_id, 1);
+
         PoolMockupInfo {
-            pool_balance0: pool_x,
-            pool_balance1: pool_y,
             pool_id,
             app,
             deployer,
-            price: Decimal::new(pool_y.into())/Decimal::new(pool_x.into())
+            price: Decimal::new(y_bal.into())/Decimal::new(x_bal.into())
         }
     }
 
@@ -906,7 +912,7 @@ mod test {
 
     #[test]
     fn normal_rebalance() {
-        let pool_info = create_basic_usdc_osmo_pool();
+        let pool_info = create_basic_usdc_osmo_pool(100_000, 200_000);
         let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg {
             base_factor: "2".into(), limit_factor: "1.45".into(), full_range_weight: "0.55".into()
         });
@@ -933,7 +939,7 @@ mod test {
 
     #[test]
     fn normal_rebalance_dual() {
-        let pool_info = create_basic_usdc_osmo_pool();
+        let pool_info = create_basic_usdc_osmo_pool(100_000, 200_000);
         let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
             base_factor: "2".into(), limit_factor: "1.45".into(), full_range_weight: "0.55".into()
         });
@@ -960,10 +966,9 @@ mod test {
 
     #[test]
     fn rebalance_in_proportion() {
-        let pool_info = create_basic_usdc_osmo_pool();
-        let PoolMockupInfo { 
-            pool_balance0, pool_balance1, deployer, ..
-        } = &pool_info;
+        let pool_balance0 = 100_000;
+        let pool_balance1 = 200_000;
+        let pool_info = create_basic_usdc_osmo_pool(pool_balance0, pool_balance1);
 
         let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
             base_factor: "2".into(), limit_factor: "1.45".into(), full_range_weight: "0.55".into()
@@ -976,22 +981,22 @@ mod test {
                 amount1: Uint128::new(pool_balance1/2),
                 amount0_min: Uint128::new(pool_balance0/2),
                 amount1_min: Uint128::new(pool_balance1/2),
-                to: deployer.address()
+                to: pool_info.deployer.address()
             }),
             &[
                 Coin::new(pool_balance0/2, USDC_DENOM).into(),
                 Coin::new(pool_balance1/2, OSMO_DENOM).into()
             ],
-            &deployer
+            &pool_info.deployer
         ).unwrap();
 
-        wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &deployer)
+        wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
             .unwrap();
     }
 
     #[test]
     fn only_limit_rebalance() {
-        let pool_info = create_basic_usdc_osmo_pool();
+        let pool_info = create_basic_usdc_osmo_pool(100_000, 200_000);
         let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
             base_factor: "2".into(), limit_factor: "1.45".into(), full_range_weight: "0.55".into()
         });
@@ -1017,7 +1022,7 @@ mod test {
 
     #[test]
     fn only_limit_rebalance_dual() {
-        let pool_info = create_basic_usdc_osmo_pool();
+        let pool_info = create_basic_usdc_osmo_pool(100_000, 200_000);
         let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
             base_factor: "2".into(), limit_factor: "1.45".into(), full_range_weight: "0.55".into()
         });
@@ -1043,7 +1048,8 @@ mod test {
 
     #[test]
     fn vault_positions() {
-        let pool_info = create_basic_usdc_osmo_pool();
+        let (pool_x, pool_y) = (100_000, 200_000);
+        let pool_info = create_basic_usdc_osmo_pool(pool_x, pool_y);
         let base_factor = Decimal::from_str("2").unwrap();
         let limit_factor = Decimal::from_str("1.45").unwrap();
         let full_range_weight = Decimal::from_str("0.55").unwrap();
@@ -1054,18 +1060,19 @@ mod test {
             full_range_weight: full_range_weight.to_string()
         });
 
+        let (vault_x, vault_y) = (1_000, 1_000);
         wasm.execute(
             &vault_addr.0,
             &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(100),
-                amount1: Uint128::new(100),
-                amount0_min: Uint128::new(100),
-                amount1_min: Uint128::new(100),
+                amount0: Uint128::new(vault_x),
+                amount1: Uint128::new(vault_y),
+                amount0_min: Uint128::new(vault_x),
+                amount1_min: Uint128::new(vault_y),
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(100, USDC_DENOM).into(),
-                Coin::new(100, OSMO_DENOM).into()
+                Coin::new(vault_x, USDC_DENOM).into(),
+                Coin::new(vault_y, OSMO_DENOM).into()
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1077,24 +1084,87 @@ mod test {
             .query(&vault_addr.0, &QueryMsg::VaultPositions {})
             .unwrap();
 
-
         println!("State: {:?}", positions);
         let cl = ConcentratedLiquidity::new(&pool_info.app);
 
-        let full_range_position = cl.query_position_by_id(&PositionByIdRequest { 
-            position_id: positions.full_range_position_id.unwrap()
-        }).unwrap().position.unwrap().position.unwrap();
+        let positions_query = |positions: &VaultState| {
+            let full = cl.query_position_by_id(&PositionByIdRequest { 
+                position_id: positions.full_range_position_id.unwrap()
+            }).unwrap().position.unwrap();
 
-        let base_position = cl.query_position_by_id(&PositionByIdRequest { 
-            position_id: positions.base_position_id.unwrap()
-        }).unwrap().position.unwrap();
+            let base = cl.query_position_by_id(&PositionByIdRequest { 
+                position_id: positions.base_position_id.unwrap()
+            }).unwrap().position.unwrap();
 
-        let limit_position = cl.query_position_by_id(&PositionByIdRequest { 
-            position_id: positions.limit_position_id.unwrap()
-        }).unwrap().position.unwrap();
+            let limit = cl.query_position_by_id(&PositionByIdRequest { 
+                position_id: positions.limit_position_id.unwrap()
+            }).unwrap().position.unwrap();
 
-        println!("FULL RANGE POS: {:?}", full_range_position);
-        println!("BASE POS: {:?}", base_position);
-        println!("LIMIT POS: {:?}", limit_position);
+            (full, base, limit)
+        };
+        
+        let position_balances = || {
+            let positions: VaultState = wasm
+                .query(&vault_addr.0, &QueryMsg::VaultPositions {})
+                .unwrap();
+
+            let (full, base, limit) = positions_query(&positions);
+            (
+                (full.asset0.unwrap(), full.asset1.unwrap()),
+                (base.asset0.unwrap(), base.asset1.unwrap()),
+                (limit.asset0.unwrap(), limit.asset1.unwrap())
+            )
+        };
+
+        let vault_balances = || -> VaultBalancesResponse {
+            wasm.query(&vault_addr.0, &QueryMsg::VaultBalances {}).unwrap()
+        };
+
+        println!("Bals after 1st rebalance: {:?}", position_balances());
+        println!("Computed by contract as: {:?}", vault_balances());
+        println!("-------------------------------------------------------------");
+
+        let pm = PoolManager::new(&pool_info.app);
+        let usdc_got = pm.swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: pool_info.deployer.address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: pool_info.pool_id, token_out_denom: USDC_DENOM.into()
+                }],
+                token_in: Some(Coin::new(pool_y/10, OSMO_DENOM).into()),
+                token_out_min_amount: "1".into()
+            }, &pool_info.deployer
+        ).unwrap().data.token_out_amount;
+        let usdc_got = Uint128::from_str(&usdc_got).unwrap();
+        println!("USDC GOT: {}", usdc_got);
+
+        println!("Bals after 1st swap: {:?}", position_balances());
+        println!("Computed by contract as: {:?}", vault_balances());
+        println!("---------------------------------------------------------");
+
+        wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
+            .unwrap();
+
+        println!("Bals after 2nd rebalance: {:?}", position_balances());
+        println!("Computed by contract as: {:?}", vault_balances());
+        println!("---------------------------------------------------------");
+
+        pm.swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: pool_info.deployer.address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: pool_info.pool_id, token_out_denom: OSMO_DENOM.into()
+                }],
+                token_in: Some(Coin::new(usdc_got.into(), USDC_DENOM).into()),
+                token_out_min_amount: "1".into()
+            }, &pool_info.deployer
+        ).unwrap();
+
+        println!("Bals after 2nd swap: {:?}", position_balances());
+        println!("Computed by contract as: {:?}", vault_balances());
+        println!("---------------------------------------------------------");
+
+        wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
+            .unwrap();
     }
 }
