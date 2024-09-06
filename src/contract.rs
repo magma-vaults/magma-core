@@ -254,8 +254,8 @@ mod query {
             let total1: Uint256 = total1.into();
 
             let cross = cmp::min(
-                input_amount0.checked_mul(total1.into()).unwrap(),
-                input_amount1.checked_mul(total0.into()).unwrap()
+                input_amount0.checked_mul(total1).unwrap(),
+                input_amount1.checked_mul(total0).unwrap()
             );
             
             if cross.is_zero() {
@@ -757,12 +757,9 @@ mod exec {
 
          let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
 
-         remove_liquidity_msg(PositionType::FullRange, deps, &env)
-             .map(|msg| liquidity_removal_msgs.push(msg));
-         remove_liquidity_msg(PositionType::Base, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
-         remove_liquidity_msg(PositionType::Limit, deps, &env)
-            .map(|msg| liquidity_removal_msgs.push(msg));
+         if let Some(msg) = remove_liquidity_msg(PositionType::FullRange, deps, &env) { liquidity_removal_msgs.push(msg) }
+         if let Some(msg) = remove_liquidity_msg(PositionType::Base, deps, &env) { liquidity_removal_msgs.push(msg) }
+         if let Some(msg) = remove_liquidity_msg(PositionType::Limit, deps, &env) { liquidity_removal_msgs.push(msg) }
 
         // TODO Add callback for protocol fees and manager fees.
         let position_ids = liquidity_removal_msgs
