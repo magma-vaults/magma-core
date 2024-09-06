@@ -310,106 +310,70 @@ pub fn execute(
 
 mod exec {
 
-    use std::str::FromStr;
-    use cosmwasm_std::{Decimal, SubMsg};
-    use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
-        MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
-    };
-    use crate::{msg::{DepositMsg, PositionType}, state::{price_function_inv, raw, Weight}};
-    use super::*;
-
-    // TODO More clarifying errors. TODO Events to query positions (deposits).
+    use cosmwasm_std::{BankMsg, Coin, Uint128, Uint256, Decimal};
+    use cw_utils::must_pay;
+    use crate::state::{VAULT_INFO, BLACKLISTED_ADDRESSES, TOKEN_INFO};
+    use crate::error::ContractError;
+    use crate::msg::{DepositMsg, CalcSharesAndUsableAmountsResponse};
+    
     pub fn deposit(
-        DepositMsg { amount0, amount1, amount0_min, amount1_min, to }: DepositMsg,
         deps: DepsMut,
         env: Env,
-        info: MessageInfo
+        info: MessageInfo,
+        msg: DepositMsg,
     ) -> Result<Response, ContractError> {
-        use cosmwasm_std::{BankMsg, Uint128};
-        
-        // Invariant: `VAULT_INFO` should always be present after instantiation.
-        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
-        let contract_addr = env.contract.address.clone();
-
+        let DepositMsg { amount0, amount1, amount0_min, amount1_min, to } = msg;
+    
+        // Load vault info
+        let vault_info = VAULT_INFO.load(deps.storage)?;
         let denom0 = vault_info.demon0(&deps.querier);
         let denom1 = vault_info.demon1(&deps.querier);
-
-        if amount0.is_zero() && amount1.is_zero() && info.funds.is_empty() {
-            return Err(ContractError::ZeroTokensSent {})
-        }
-
-        let amount0_got = info.funds.iter()
-            .find(|x| x.denom == denom0)
-            .map(|x| x.amount)
-            .unwrap_or(Uint128::zero());
-
-        let amount1_got = info.funds.iter()
-            .find(|x| x.denom == denom1)
-            .map(|x| x.amount)
-            .unwrap_or(Uint128::zero());
-
-        if amount0_got != amount0 || amount1_got != amount1 {
+    
+        // Validate and extract sent funds
+        let amount0_sent = must_pay(&info, &denom0)?;
+        let amount1_sent = must_pay(&info, &denom1)?;
+    
+        // Check if sent amounts match the requested amounts
+        if amount0_sent != amount0 || amount1_sent != amount1 {
             return Err(ContractError::ImproperSentAmounts { 
-                expected: format!( "({}, {})", amount0, amount1),
-                got: format!("({}, {})", amount0_got, amount1_got)
-            })
+                expected: format!("({}, {})", amount0, amount1),
+                got: format!("({}, {})", amount0_sent, amount1_sent)
+            });
         }
-
-        let new_holder = deps.api.addr_validate(&to)
-            .map_err(|_| ContractError::InvalidShareholderAddress(to))?;
-
-        if new_holder == contract_addr {
-            return Err(ContractError::ImproperSharesOwner(new_holder.into()))
+    
+        // Validate recipient address
+        let recipient = deps.api.addr_validate(&to)?;
+    
+        // Check if recipient is blacklisted
+        if BLACKLISTED_ADDRESSES.may_load(deps.storage, recipient.clone())?.is_some() {
+            return Err(ContractError::BlacklistedAddress(recipient.to_string()));
         }
-
+    
+        // Check if recipient is a contract
+        if deps.querier.query_wasm_smart_contract_info(recipient.clone()).is_ok() {
+            return Err(ContractError::ContractAddressNotAllowed(recipient.to_string()));
+        }
+    
+        // Prevent sending to the contract itself
+        if recipient == env.contract.address {
+            return Err(ContractError::ImproperSharesOwner(recipient.to_string()));
+        }
+    
+        // Calculate shares and usable amounts
         let CalcSharesAndUsableAmountsResponse {
             shares, 
-            usable_amount0: amount0_used,
-            usable_amount1: amount1_used
-        } = query::calc_shares_and_usable_amounts(amount0, amount1, true, deps.as_ref(), &env);
-
-
-        // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
-
-        // TODO: Document those invariants. THEYRE NOT requirements, even if it looks like i it.
-        assert!(amount0_used <= amount0 && amount1_used <= amount1);
-        assert!(!shares.is_zero());
-
-        if amount0_used < amount0_min || amount1_used < amount1_min {
-            return Err(ContractError::DepositedAmontsBelowMin { 
-                used: format!("({}, {})", amount0_used, amount1_used),
+            usable_amount0,
+            usable_amount1
+        } = query::calc_shares_and_usable_amounts(amount0, amount1, true, deps.as_ref(), &env)?;
+    
+        // Check for minimum amounts
+        if usable_amount0 < amount0_min || usable_amount1 < amount1_min {
+            return Err(ContractError::DepositedAmountsBelowMin { 
+                used: format!("({}, {})", usable_amount0, usable_amount1),
                 wanted: format!("({}, {})", amount0_min, amount1_min)
-            })
+            });
         }
 
-        let res = {
-            let mut info = info.clone();
-            info.sender = contract_addr;
-
-            // Invariant: The only allowed minter is this contract itself.
-            execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap()
-        };
-        
-        // TODO Clean this procedure. Is the problem zero amounts? Cant I send 2 amounts at the
-        // same time? maybe by filtering the original vec I had?
-
-        let res = if amount0_used < amount0 {
-            // Invariant: We just verified the subtraction wont overflow.
-            res.add_message(BankMsg::Send { 
-                to_address: info.sender.to_string(), 
-                amount: coins(amount0.checked_sub(amount0_used).unwrap().into(), denom0)
-            })
-        } else { res };
-
-        let res = if amount1_used < amount1 {
-            // Invariant: We just verified the subtraction wont overflow.
-            res.add_message(BankMsg::Send { 
-                to_address: info.sender.to_string(), 
-                amount: coins(amount1.checked_sub(amount1_used).unwrap().into(), denom1)
-            })
-        } else { res };
-
-        Ok(res)
     }
 
     pub fn remove_liquidity_msg(for_position: PositionType, deps: Deps, env: &Env) -> Option<MsgWithdrawPosition> {
