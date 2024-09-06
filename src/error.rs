@@ -1,8 +1,7 @@
-
 use cosmwasm_std::StdError;
 use cw_utils::PaymentError;
 use thiserror::Error;
- 
+
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
     #[error("{0}")]
@@ -13,6 +12,12 @@ pub enum ContractError {
 
     #[error("Payment error: {0}")]
     Payment(#[from] PaymentError),
+
+    #[error("Address {0} is blacklisted")]
+    BlacklistedAddress(String),
+
+    #[error("Contract address not allowed: {0}")]
+    ContractAddressNotAllowed(String),
 
     // #[error("Invalid deposit")]
     // InvalidDeposit {},
@@ -54,6 +59,5 @@ pub enum ContractError {
 
     // Rebalance errors.
     #[error("You cant rebalance a vault without funds")]
-    NothingToRebalance {}
+    NothingToRebalance {},
 }
-
