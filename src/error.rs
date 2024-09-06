@@ -1,5 +1,5 @@
 
-use cosmwasm_std::{Coin, StdError};
+use cosmwasm_std::StdError;
 use cw_utils::PaymentError;
 use thiserror::Error;
  

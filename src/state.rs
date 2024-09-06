@@ -10,7 +10,7 @@ use readonly;
 
 use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
 use crate::constants::MAX_TICK;
-use std::{any::type_name_of_val, cmp::min_by_key, str::FromStr};
+use std::{cmp::min_by_key, str::FromStr};
 
 #[cw_serde] #[readonly::make]
 pub struct Weight(pub Decimal);
@@ -18,7 +18,7 @@ impl Weight {
     const MAX: Decimal = Decimal::one();
 
     pub fn new(value: &String) -> Option<Self> {
-        let value = Decimal::from_str(&value).ok()?;
+        let value = Decimal::from_str(value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
     
@@ -36,7 +36,7 @@ impl Weight {
 pub struct PositiveDecimal(pub Decimal);
 impl PositiveDecimal {
     pub fn new(value: &Decimal) -> Option<Self> {
-        (value != Decimal::zero()).then_some(Self(value.clone()))
+        (value != Decimal::zero()).then_some(Self(*value))
     }
 
     pub fn floorlog10(&self) -> i32 {
@@ -47,7 +47,7 @@ impl PositiveDecimal {
         let x = x.checked_sub(18).unwrap();
         // Invariant: `floor(log10(u128::MAX)) - 18 =  20` and
         //            `floor(log10(1))         - 18 = -18`
-        assert!(-18 <= x && x <= 20);
+        assert!((-18..=20).contains(&x));
         x
     }
 }
@@ -63,7 +63,7 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
             ten.checked_pow(exp).ok()
         } else {
             SignedDecimal256::one().checked_div(
-                ten.checked_pow(exp.unsigned_abs().into()).ok()?
+                ten.checked_pow(exp.unsigned_abs()).ok()?
             ).ok()
         }
     };
@@ -74,7 +74,7 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
 
         let x = maybe_neg_pow(floor_log_p)?
             .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?).ok()?
-            .checked_add(p.clone().try_into().ok()?).ok()?;
+            .checked_add((*p).try_into().ok()?).ok()?;
 
         let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
             .checked_mul(x).ok()?;
@@ -171,7 +171,7 @@ impl PoolId {
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
     pub fn new(value: &String) -> Option<Self> {
-        let value = Decimal::from_str(&value).ok()?;
+        let value = Decimal::from_str(value).ok()?;
         (value >= Decimal::one()).then_some(Self(value))
     }
 
@@ -322,6 +322,12 @@ pub struct VaultState {
     pub full_range_position_id: Option<u64>,
     pub base_position_id: Option<u64>,
     pub limit_position_id: Option<u64>
+}
+
+impl Default for VaultState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl VaultState {
