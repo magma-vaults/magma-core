@@ -311,7 +311,7 @@ pub fn execute(
 mod exec {
 
     use std::{convert::identity, str::FromStr};
-    use cosmwasm_std::{Decimal, Decimal256, SubMsg};
+    use cosmwasm_std::{Decimal, Decimal256, Event, SubMsg};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
         MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
@@ -500,7 +500,14 @@ mod exec {
             full_range_weight 
         } = VAULT_PARAMETERS.load(deps.storage).unwrap();
 
+        let mut events: Vec<Event> = vec![];
+
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
+        events.push(Event::new("vault_balances_snapshot")
+            .add_attribute("balance0", bal0)
+            .add_attribute("balance1", bal1)
+        );
+
         // NOTE: We remove 3 tokens from each balance to prevent dust errors. Ie,
         //       position withdrawals always leave 1 token behind.
         let bal0 = bal0.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
@@ -511,6 +518,9 @@ mod exec {
         }
 
         let price = pool_id.price(&deps.querier);
+        events.push(Event::new("vault_pool_price_snapshot")
+            .add_attribute("price", price.to_string())
+        );
 
         if price.is_zero() {
             // TODO: If pool has no price, we can deposit in any proportion.
@@ -638,8 +648,6 @@ mod exec {
             (limit_balance0, limit_balance1)
         };
 
-
-        let mut res: Response = Response::new();
         let mut new_position_msgs: Vec<SubMsg> = vec![];
 
         // If `full_range_balance0` is not zero, we already checked that neither
@@ -651,12 +659,13 @@ mod exec {
             let lower_tick = pool_id.min_valid_tick(&deps.querier);
             let upper_tick = pool_id.max_valid_tick(&deps.querier);
 
-            res = res
-                .add_attribute("action", "create_full_range_position")
+            events.push(Event::new("create_vault_position")
+                .add_attribute("position_type", "full_range")
                 .add_attribute("lower_tick", lower_tick.to_string())
                 .add_attribute("upper_tick", upper_tick.to_string())
                 .add_attribute("amount0", full_range_balance0.to_string())
-                .add_attribute("amount1", full_range_balance1.to_string());
+                .add_attribute("amount1", full_range_balance1.to_string())
+            );
 
             new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                 lower_tick,
@@ -672,25 +681,25 @@ mod exec {
         // `base_range_balance1` will be.
         if !base_factor.is_one() && !base_range_balance0.is_zero() {
 
-            let current_price = pool_id.price(&deps.querier);
             // Invariant: `base_factor > 1`, thus wont panic.
-            let lower_price = current_price
+            let lower_price = price
                 .checked_div(base_factor.0)
                 .unwrap();
 
-            let upper_price = current_price
+            let upper_price = price
                 .checked_mul(base_factor.0)
                 .unwrap_or(Decimal::MAX);
 
             let lower_tick = price_function_inv(&lower_price);
             let upper_tick = price_function_inv(&upper_price);
             
-            res = res
-                .add_attribute("action", "create_base_position")
+            events.push(Event::new("create_vault_position")
+                .add_attribute("position_type", "base")
                 .add_attribute("lower_tick", lower_tick.to_string())
                 .add_attribute("upper_tick", upper_tick.to_string())
                 .add_attribute("amount0", base_range_balance0.to_string())
-                .add_attribute("amount1", base_range_balance1.to_string());
+                .add_attribute("amount1", base_range_balance1.to_string())
+            );
 
             new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                 lower_tick,
@@ -704,10 +713,9 @@ mod exec {
 
         if !limit_factor.is_one() && (!limit_balance0.is_zero() || !limit_balance1.is_zero()) {
 
-            let current_price = pool_id.price(&deps.querier);
             if limit_balance0.is_zero() {
                 // Invariant: `limit_factor > 1`, thus wont panic.
-                let lower_price = current_price
+                let lower_price = price
                     .checked_div(limit_factor.0)
                     .unwrap();
 
@@ -719,12 +727,13 @@ mod exec {
                     .checked_sub(pool_id.tick_spacing(&deps.querier))
                     .unwrap();
 
-                res = res
-                    .add_attribute("action", "create_limit_position")
+                events.push(Event::new("create_vault_position")
+                    .add_attribute("position_type", "limit")
                     .add_attribute("lower_tick", lower_tick.to_string())
                     .add_attribute("upper_tick", upper_tick.to_string())
                     .add_attribute("amount0", limit_balance0.to_string())
-                    .add_attribute("amount1", limit_balance1.to_string());
+                    .add_attribute("amount1", limit_balance1.to_string())
+                );
 
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     lower_tick,
@@ -735,7 +744,7 @@ mod exec {
                     &env
                 ), 2))
             } else if limit_balance1.is_zero() {
-                let upper_price = current_price
+                let upper_price = price
                     .checked_mul(limit_factor.0)
                     .unwrap_or(Decimal::MAX);
 
@@ -747,12 +756,13 @@ mod exec {
                     .checked_add(pool_id.tick_spacing(&deps.querier))
                     .unwrap();
 
-                res = res
-                    .add_attribute("action", "create_limit_position")
+                events.push(Event::new("create_vault_position")
+                    .add_attribute("position_type", "limit")
                     .add_attribute("lower_tick", lower_tick.to_string())
                     .add_attribute("upper_tick", upper_tick.to_string())
                     .add_attribute("amount0", limit_balance0.to_string())
-                    .add_attribute("amount1", limit_balance1.to_string());
+                    .add_attribute("amount1", limit_balance1.to_string())
+                );
 
                 new_position_msgs.push(SubMsg::reply_on_success(create_position_msg(
                     lower_tick,
@@ -783,7 +793,8 @@ mod exec {
             position_ids, sender: env.contract.address.into()
         };
 
-        Ok(res
+        Ok(Response::new()
+            .add_events(events)
             .add_message(rewards_claim_msg)
             .add_messages(liquidity_removal_msgs)
             .add_submessages(new_position_msgs)
