@@ -53,6 +53,8 @@ impl PositiveDecimal {
 }
 
 // TODO Check proof for output type `i32`, not `i64`.
+// TODO Use anyhow to propagate errors that I do not care about anyways
+//      (because theyre gonna get unwrapped).
 pub fn price_function_inv(p: &Decimal) -> i32 {
 
     let maybe_neg_pow = |exp: i32| {

@@ -310,8 +310,8 @@ pub fn execute(
 
 mod exec {
 
-    use std::str::FromStr;
-    use cosmwasm_std::{Decimal, SubMsg};
+    use std::{convert::identity, str::FromStr};
+    use cosmwasm_std::{Decimal, Decimal256, SubMsg};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
         MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
@@ -486,7 +486,6 @@ mod exec {
         }
     }
 
-    // TODO Add attributes to Response to emit an event with info about the new positions.
     // TODO Finish cleanup.
     pub fn rebalance(deps: Deps, env: Env) -> Result<Response, ContractError> {
         // TODO Can rebalance? Check `VaultRebalancer` and other params,
@@ -494,6 +493,7 @@ mod exec {
 
         // Invariant: Any state will be initialized after instantation.
         let pool_id = &VAULT_INFO.load(deps.storage).unwrap().pool_id;
+
         let VaultParameters { 
             base_factor,
             limit_factor,
@@ -510,7 +510,12 @@ mod exec {
             return Err(ContractError::NothingToRebalance {})
         }
 
-        let price = pool_id.price(&deps.querier); // TODO: What if `price == 0`?
+        let price = pool_id.price(&deps.querier);
+
+        if price.is_zero() {
+            // TODO: If pool has no price, we can deposit in any proportion.
+            return Err(ContractError::PoolWithoutPrice(pool_id.0))
+        }
         
         let (balanced_balance0, balanced_balance1) = {
             // Assumption: `price` uses 18 decimals. TODO: Prove it! Wtf is "ToLegacyDec()" in the
@@ -557,12 +562,13 @@ mod exec {
         let (full_range_balance0, full_range_balance1) = {
             // TODO Document the math (see [[MagmaLiquidity]]).
             // FIXME All those unwraps could fail under extreme conditions. Lift to Uint256?
+            // TODO PROVE SECURITY!
             let sqrt_k = base_factor.0.sqrt();
 
-            let numerator = full_range_weight
-                .mul_dec(&sqrt_k.sqrt())
-                .checked_mul(balanced_balance0)
-                .ok();
+            let numerator = full_range_weight.mul_dec(&sqrt_k.sqrt());
+            // Invariant: Wont overflow because we lifter to 256 bits.
+            let numerator = Decimal256::from(numerator)
+                .checked_mul(balanced_balance0.into()).unwrap();
 
             let denominator = sqrt_k
                 .checked_sub(Decimal::one())
@@ -570,14 +576,17 @@ mod exec {
                 .checked_add(full_range_weight.0)
                 .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
 
-            // Invariant: Wont produce a `DivisionByZero`.
+            // Invariant: Wont produce a `DivisionByZero` nor will overflow.
             // Proof: Let `w \in [0, 1]` be the `full_range_weight`. Let `k \in [1, +\infty)`
             //        be the `base_factor`. Then `sqrt(k) + w - 1` could only be `0` if
             //        `sqrt(k) + w` was `1`, but thats impossible, because `w > 0 \lor k > 1`
-            //        is invariant (see `VaultParameters` instantiation).
-            let x0 = numerator.and_then(|n| n.checked_div(denominator).ok()).unwrap();
-            let y0 = x0.checked_mul(price).unwrap();
-            (x0, y0)
+            //        is invariant (see `VaultParameters` instantiation). TODO The rest
+            //        of the proof is not trivial.
+            let x0 = numerator.checked_div(denominator.into()).unwrap();
+            let y0 = x0.checked_mul(price.into()).unwrap();
+            // Invariant: The downgrade wont overflow.
+            // Proof: TODO, not trivial.
+            (Decimal::try_from(x0).unwrap(), Decimal::try_from(y0).unwrap())
         };
 
         // Invariant: If any of the balanced balances is not zero, and if the vault
@@ -598,7 +607,10 @@ mod exec {
         }
 
         let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
-            // TODO Prove that those unwraps will never fail.
+            // Invariant: Wont overflow, because full range balances will always be
+            //            lower than the total balanced balances.
+            // Proof: TODO, but if we prove that $x_0 < X$, then that also proves
+            //        that $x_0$ can be safely downgraded to 128 bits.
             let base_range_balance0 = balanced_balance0
                 .checked_sub(full_range_balance0)
                 .unwrap();
@@ -661,9 +673,10 @@ mod exec {
         if !base_factor.is_one() && !base_range_balance0.is_zero() {
 
             let current_price = pool_id.price(&deps.querier);
+            // Invariant: `base_factor > 1`, thus wont panic.
             let lower_price = current_price
                 .checked_div(base_factor.0)
-                .unwrap_or(Decimal::MIN);
+                .unwrap();
 
             let upper_price = current_price
                 .checked_mul(base_factor.0)
@@ -693,13 +706,14 @@ mod exec {
 
             let current_price = pool_id.price(&deps.querier);
             if limit_balance0.is_zero() {
+                // Invariant: `limit_factor > 1`, thus wont panic.
                 let lower_price = current_price
                     .checked_div(limit_factor.0)
-                    .unwrap_or(Decimal::MIN);
+                    .unwrap();
 
                 let lower_tick = price_function_inv(&lower_price);
 
-                // Invariant: Ticks nor Ticks spacings will never be large enough to
+                // Invariant: Ticks nor Ticks spacings will ever be large enough to
                 //            overflow out of `i32`.
                 let upper_tick = pool_id.current_tick(&deps.querier)
                     .checked_sub(pool_id.tick_spacing(&deps.querier))
@@ -723,7 +737,7 @@ mod exec {
             } else if limit_balance1.is_zero() {
                 let upper_price = current_price
                     .checked_mul(limit_factor.0)
-                    .unwrap_or(Decimal::MIN);
+                    .unwrap_or(Decimal::MAX);
 
                 let upper_tick = price_function_inv(&upper_price);
 
@@ -755,11 +769,11 @@ mod exec {
             }
         }
 
-         let mut liquidity_removal_msgs: Vec<MsgWithdrawPosition> = vec![];
-
-         if let Some(msg) = remove_liquidity_msg(PositionType::FullRange, deps, &env) { liquidity_removal_msgs.push(msg) }
-         if let Some(msg) = remove_liquidity_msg(PositionType::Base, deps, &env) { liquidity_removal_msgs.push(msg) }
-         if let Some(msg) = remove_liquidity_msg(PositionType::Limit, deps, &env) { liquidity_removal_msgs.push(msg) }
+         let liquidity_removal_msgs: Vec<_> = vec![
+             remove_liquidity_msg(PositionType::FullRange, deps, &env),
+             remove_liquidity_msg(PositionType::Base, deps, &env),
+             remove_liquidity_msg(PositionType::Limit, deps, &env),
+         ].into_iter().filter_map(identity).collect();
 
         // TODO Add callback for protocol fees and manager fees.
         let position_ids = liquidity_removal_msgs
