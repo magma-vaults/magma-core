@@ -54,6 +54,10 @@ pub enum ContractError {
 
     // Rebalance errors.
     #[error("You cant rebalance a vault without funds")]
-    NothingToRebalance {}
+    NothingToRebalance {},
+
+    #[error("Pool with id {0} is empty, and thus has no price")]
+    PoolWithoutPrice(u64)
+    
 }
 
