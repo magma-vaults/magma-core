@@ -1,5 +1,5 @@
 use cosmwasm_std::{coins, entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response, StdResult, Uint128};
-use cw20_base::contract::{execute_mint, query_balance};
+use cw20_base::contract::{execute_mint, query_balance, query_token_info, execute_burn};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 use std::cmp;
@@ -305,17 +305,18 @@ pub fn execute(
     match msg {
         Deposit(deposit_msg) => exec::deposit(deposit_msg, deps, env, info),
         Rebalance {} => exec::rebalance(deps.as_ref(), env),
+        Withdraw(withdraw_msg) => exec::withdraw(withdraw_msg, deps, env, info)
     }
 }
 
 mod exec {
 
-    use std::{convert::identity, str::FromStr};
-    use cosmwasm_std::{Decimal, Decimal256, Event, SubMsg};
+    use std::{convert::identity, env::remove_var, str::FromStr};
+    use cosmwasm_std::{BankMsg, Decimal, Decimal256, Event, SubMsg, Uint256};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
         MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
-    use crate::{msg::{DepositMsg, PositionType}, state::{price_function_inv, raw, Weight}};
+    use crate::{msg::{DepositMsg, PositionType, WithdrawMsg}, state::{price_function_inv, raw, Weight}};
     use super::*;
 
     // TODO More clarifying errors. TODO Events to query positions (deposits).
@@ -359,7 +360,7 @@ mod exec {
             .map_err(|_| ContractError::InvalidShareholderAddress(to))?;
 
         if new_holder == contract_addr {
-            return Err(ContractError::ImproperSharesOwner(new_holder.into()))
+            return Err(ContractError::ShareholderCantBeContract(new_holder.into()))
         }
 
         let CalcSharesAndUsableAmountsResponse {
@@ -412,7 +413,12 @@ mod exec {
         Ok(res)
     }
 
-    pub fn remove_liquidity_msg(for_position: PositionType, deps: Deps, env: &Env) -> Option<MsgWithdrawPosition> {
+    pub fn remove_liquidity_msg(
+        for_position: PositionType,
+        deps: Deps,
+        env: &Env,
+        liquidity_proportion: &Weight
+    ) -> Option<MsgWithdrawPosition> {
         // Invariant: After instantiation, `VAULT_STATE` is always present.
         let VaultState { 
             full_range_position_id,
@@ -435,10 +441,16 @@ mod exec {
             .position.unwrap()
             .liquidity;
 
-        let position_liquidity = Decimal::from_str(&position_liquidity)
-            .unwrap()
-            .atomics()
-            .to_string();
+        let position_liquidity = if liquidity_proportion.is_max() {
+            Decimal::from_str(&position_liquidity)
+                .unwrap()
+                .atomics()
+                .to_string()
+        } else {
+            liquidity_proportion.mul_dec(
+                &Decimal::from_str(&position_liquidity).unwrap()
+            ).atomics().to_string()
+        };
 
         // TODO Also have to claim spread factor manually.
         Some(MsgWithdrawPosition {
@@ -780,9 +792,9 @@ mod exec {
         }
 
          let liquidity_removal_msgs: Vec<_> = vec![
-             remove_liquidity_msg(PositionType::FullRange, deps, &env),
-             remove_liquidity_msg(PositionType::Base, deps, &env),
-             remove_liquidity_msg(PositionType::Limit, deps, &env),
+             remove_liquidity_msg(PositionType::FullRange, deps, &env, &Weight::max()),
+             remove_liquidity_msg(PositionType::Base, deps, &env, &Weight::max()),
+             remove_liquidity_msg(PositionType::Limit, deps, &env, &Weight::max()),
          ].into_iter().filter_map(identity).collect();
 
         // TODO Add callback for protocol fees and manager fees.
@@ -798,6 +810,98 @@ mod exec {
             .add_message(rewards_claim_msg)
             .add_messages(liquidity_removal_msgs)
             .add_submessages(new_position_msgs)
+        )
+    }
+
+    pub fn withdraw(
+        WithdrawMsg { shares, amount0_min, amount1_min, to }: WithdrawMsg,
+        deps: DepsMut,
+        env: Env,
+        info: MessageInfo
+    ) -> Result<Response, ContractError> {
+        
+        if shares.is_zero() {
+            return Err(ContractError::ZeroSharesWithdrawal {})
+        }
+
+        let withdrawal_address = deps.api.addr_validate(&to)
+            .map_err(|_| ContractError::InvalidWithdrawalAddress(to))?;
+
+        if withdrawal_address == env.contract.address {
+            return Err(ContractError::CantWithdrawToContract(withdrawal_address.into()))
+        }
+
+        // Invariant: TokenInfo will always be present after instantiation.
+        let total_shares_supply = query_token_info(deps.as_ref()).unwrap().total_supply;
+
+        let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps.as_ref(), &env);
+
+        // Invariant: We know that `info.sender` is a proper address, thus even if it didnt 
+        //            any shares, the query would return Uint128::zero().
+        let shares_held = query_balance(deps.as_ref(), info.sender.clone().into()).unwrap().balance;
+
+        let shares_held = Decimal::raw(shares_held.into());
+        let total_shares_supply = Decimal::raw(total_shares_supply.into());
+        // TODO Invariant: Wont panic bla bla
+        // Invariant: We already verified `total_shares_supply` is not zero, 
+        //            and we also know that it will always be larger than `shares_held`,
+        //            thus the division cant overflow.
+        let shares_proportion = Weight::from_decimal(
+            &shares_held.checked_div(total_shares_supply).unwrap()
+        ).unwrap();
+
+        // Invariant: Wont overflow because we lifted to Uint256. Wont produce a division
+        //            by zero error because for shares to exist, the total supply has
+        //            to be greater than zero. Wont overflow during Uint128 downgrade because
+        //            individual shares will always be smaller than total supply, so the resulting
+        //            computation will always be lower than `bal0` or `bal1`.
+        // FIXME Adapt this invariant to the Weight lift above.
+        let expected_withdrawn_amount0 = shares_proportion.mul_raw(bal0).atomics();
+        let expected_withdrawn_amount1 = shares_proportion.mul_raw(bal1).atomics();
+        
+        if expected_withdrawn_amount0 < amount0_min || expected_withdrawn_amount1 < amount1_min {
+            return Err(ContractError::WithdrawnAmontsBelowMin { 
+                got: format!("({}, {})", expected_withdrawn_amount0, expected_withdrawn_amount1),
+                wanted: format!("({}, {})", amount0_min, amount1_min)
+            })
+        }
+
+        let liquidity_removal_msgs: Vec<_> = vec![
+            remove_liquidity_msg(PositionType::FullRange, deps.as_ref(), &env, &shares_proportion),
+            remove_liquidity_msg(PositionType::Base, deps.as_ref(), &env, &shares_proportion),
+            remove_liquidity_msg(PositionType::Limit, deps.as_ref(), &env, &shares_proportion),
+        ].into_iter().filter_map(identity).collect();
+
+        let position_ids = liquidity_removal_msgs
+            .iter().map(|msg| msg.position_id).collect();
+
+        let rewards_claim_msg = MsgCollectSpreadRewards {
+            position_ids, sender: env.contract.address.clone().into()
+        };
+
+        // Invariant: `VAULT_INFO` will always be present after instantiation.
+        let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap()
+            .pool_id.denoms(&deps.querier);
+
+        let shares_burn_response = execute_burn(deps, env.clone(), info, shares).map_err(
+            |_| ContractError::InalidWithdrawalAmount { 
+                owned: shares_held.atomics().into(),
+                withdrawn: shares.into() 
+            }
+        )?;
+
+        // TODO Test!! With amount vecs of any size! 1, 0 and 2!
+        Ok(shares_burn_response
+            .add_message(rewards_claim_msg)
+            .add_messages(liquidity_removal_msgs)
+            .add_message(BankMsg::Send { 
+                to_address: withdrawal_address.clone().into(), 
+                amount: coins(expected_withdrawn_amount0.into(), denom0)
+            })
+            .add_message(BankMsg::Send { 
+                to_address: withdrawal_address.into(), 
+                amount: coins(expected_withdrawn_amount1.into(), denom1)
+            })
         )
     }
 }

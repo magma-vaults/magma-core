@@ -15,18 +15,28 @@ use std::{cmp::min_by_key, str::FromStr};
 #[cw_serde] #[readonly::make]
 pub struct Weight(pub Decimal);
 impl Weight {
-    const MAX: Decimal = Decimal::one();
+    pub const MAX: Decimal = Decimal::one();
 
     pub fn new(value: &String) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
-    
+
+    // TODO Use From trait.
+    pub fn from_decimal(value: &Decimal) -> Option<Self> {
+        (*value <= Self::MAX).then_some(Self(*value))
+    }
+
     pub fn mul_dec(&self, value: &Decimal) -> Decimal {
         // Invariant: A weight product wont ever overflow.
         value.checked_mul(self.0).unwrap()
     }
 
+    pub fn mul_raw(&self, value: Uint128) -> Decimal {
+        self.mul_dec(&Decimal::raw(value.into()))
+    }
+
+    pub fn max() -> Self { Self(Self::MAX) }
     pub fn is_zero(&self) -> bool { self.0 == Decimal::zero() }
     pub fn is_max(&self) -> bool { self.0 == Weight::MAX }
 
