@@ -14,9 +14,6 @@ pub enum ContractError {
     #[error("Payment error: {0}")]
     Payment(#[from] PaymentError),
 
-    // #[error("Invalid deposit")]
-    // InvalidDeposit {},
-
     // Instantiation errors.
     #[error("Invalid concentrated liquidity pool_id {0}")]
     InvalidPoolId(u64),
@@ -44,7 +41,7 @@ pub enum ContractError {
     ZeroTokensSent {},
 
     #[error("Cant mint vault shares to itself ({0})")]
-    ImproperSharesOwner(String),
+    ShareholderCantBeContract(String),
 
     #[error("Used amounts below min wanted amounts: used: {used}, wanted: {wanted}")]
     DepositedAmontsBelowMin { used: String, wanted: String },
@@ -57,7 +54,22 @@ pub enum ContractError {
     NothingToRebalance {},
 
     #[error("Pool with id {0} is empty, and thus has no price")]
-    PoolWithoutPrice(u64)
+    PoolWithoutPrice(u64),
+
+    // Withdraw erors.
+    #[error("Cant withdraw 0 shares")]
+    ZeroSharesWithdrawal {},
+
+    #[error("Trying to withdraw to improper address {0}")]
+    InvalidWithdrawalAddress(String),
     
+    #[error("Cant withdraw to itself ({0})")]
+    CantWithdrawToContract(String),
+
+    #[error("Trying to withdraw more shares than owned (owned: {owned}, withdrawn: {withdrawn})")]
+    InalidWithdrawalAmount { owned: String, withdrawn: String },
+
+    #[error("Withdrawn amounts below min wanted amounts: got: {got}, wanted: {wanted}")]
+    WithdrawnAmontsBelowMin { got: String, wanted: String },
 }
 

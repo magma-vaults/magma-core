@@ -46,9 +46,18 @@ pub struct DepositMsg {
 }
 
 #[cw_serde]
+pub struct WithdrawMsg {
+    pub shares: Uint128,
+    pub amount0_min: Uint128,
+    pub amount1_min: Uint128,
+    pub to: String
+}
+
+#[cw_serde]
 pub enum ExecuteMsg {
     Deposit(DepositMsg),
-    Rebalance {}
+    Rebalance {},
+    Withdraw(WithdrawMsg)
 }
 
 #[cw_serde]

@@ -1,6 +1,6 @@
 #!/bin/sh
 
-./scripts/testnet.sh
+# ./scripts/testnet.sh
 
 WALLET=`osmosisd keys show -a wallet`
 echo "Compiling"
@@ -16,4 +16,5 @@ osmosisd tx wasm store $TARGET \
   --gas auto \
   --gas-adjustment 1.3 \
   -y
+
 
