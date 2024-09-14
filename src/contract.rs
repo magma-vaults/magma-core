@@ -311,8 +311,8 @@ pub fn execute(
 
 mod exec {
 
-    use std::{convert::identity, env::remove_var, str::FromStr};
-    use cosmwasm_std::{BankMsg, Decimal, Decimal256, Event, SubMsg, Uint256};
+    use std::str::FromStr;
+    use cosmwasm_std::{BankMsg, Decimal, Decimal256, Event, SubMsg};
     use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
         MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest
     };
@@ -795,7 +795,7 @@ mod exec {
              remove_liquidity_msg(PositionType::FullRange, deps, &env, &Weight::max()),
              remove_liquidity_msg(PositionType::Base, deps, &env, &Weight::max()),
              remove_liquidity_msg(PositionType::Limit, deps, &env, &Weight::max()),
-         ].into_iter().filter_map(identity).collect();
+         ].into_iter().flatten().collect();
 
         // TODO Add callback for protocol fees and manager fees.
         let position_ids = liquidity_removal_msgs
@@ -870,7 +870,7 @@ mod exec {
             remove_liquidity_msg(PositionType::FullRange, deps.as_ref(), &env, &shares_proportion),
             remove_liquidity_msg(PositionType::Base, deps.as_ref(), &env, &shares_proportion),
             remove_liquidity_msg(PositionType::Limit, deps.as_ref(), &env, &shares_proportion),
-        ].into_iter().filter_map(identity).collect();
+        ].into_iter().flatten().collect();
 
         let position_ids = liquidity_removal_msgs
             .iter().map(|msg| msg.position_id).collect();
@@ -1091,8 +1091,8 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(1_000, USDC_DENOM).into(),
-                Coin::new(1_500, OSMO_DENOM).into()
+                Coin::new(1_000, USDC_DENOM),
+                Coin::new(1_500, OSMO_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1118,8 +1118,8 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(1_500, USDC_DENOM).into(),
-                Coin::new(1_000, OSMO_DENOM).into()
+                Coin::new(1_500, USDC_DENOM),
+                Coin::new(1_000, OSMO_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1148,8 +1148,8 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(pool_balance0/2, USDC_DENOM).into(),
-                Coin::new(pool_balance1/2, OSMO_DENOM).into()
+                Coin::new(pool_balance0/2, USDC_DENOM),
+                Coin::new(pool_balance1/2, OSMO_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1175,7 +1175,7 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(42, USDC_DENOM).into()
+                Coin::new(42, USDC_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1201,7 +1201,7 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(42, OSMO_DENOM).into()
+                Coin::new(42, OSMO_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
@@ -1235,8 +1235,8 @@ mod test {
                 to: pool_info.deployer.address()
             }),
             &[
-                Coin::new(vault_x, USDC_DENOM).into(),
-                Coin::new(vault_y, OSMO_DENOM).into()
+                Coin::new(vault_x, USDC_DENOM),
+                Coin::new(vault_y, OSMO_DENOM)
             ],
             &pool_info.deployer
         ).unwrap();
