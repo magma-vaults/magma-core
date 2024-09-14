@@ -7,15 +7,15 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-cosmwasm-std = { version = "1.0.0", features = [] }
+cosmwasm-std = { version = "1.5.7", features = [] }
 serde = { version = "1.0.202", default-features = false, features = ["derive"] }
-cw-storage-plus = "1.0.0"
+cw-storage-plus = "1.2.0"
 thiserror = "1"
 
 # schemars = "0.8.20"
-cosmwasm-schema = "1.0.0"
+cosmwasm-schema = "1.5.7"
 osmosis-std = "0.25.0"
-cw-utils = "1.0.0"
+cw-utils = "1.0.3"
 
 cw20-base = { version = "1.1.2", features = ["library"] }
 cw20 = "1.1.2"
@@ -23,6 +23,5 @@ cw20 = "1.1.2"
 readonly = "0.2.12"
 
 [dev-dependencies]
-cw-multi-test = "1.0.0"
+cw-multi-test = "1.2.0"
 osmosis-test-tube = "25.0.0"
-
