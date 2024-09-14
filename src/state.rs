@@ -21,7 +21,7 @@ pub struct Weight(pub Decimal);
 impl Weight {
     pub const MAX: Decimal = Decimal::one();
 
-    pub fn new(value: &String) -> Option<Self> {
+    pub fn new(value: &str) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
@@ -96,7 +96,7 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
         let x = maybe_neg_pow(floor_log_p)?
             .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?)
             .ok()?
-            .checked_add((*p).try_into().ok()?)
+            .checked_add(SignedDecimal256::from(*p))
             .ok()?;
 
         let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
@@ -206,7 +206,7 @@ impl PoolId {
 #[readonly::make]
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
-    pub fn new(value: &String) -> Option<Self> {
+    pub fn new(value: &str) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value >= Decimal::one()).then_some(Self(value))
     }

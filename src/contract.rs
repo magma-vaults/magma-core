@@ -592,7 +592,7 @@ mod exec {
 
         // We take 1% slippage.
         // TODO It shouldnt be needed, test rebalances without slippage.
-        let slippage = Weight::new(&"0.99".into()).unwrap();
+        let slippage = Weight::new("0.99").unwrap();
 
         MsgCreatePosition {
             pool_id: pool.id,
@@ -1100,6 +1100,7 @@ mod test {
         SigningAccount, Wasm,
     };
 
+    // I don't kn ow why, but this instance of price is never read.
     struct PoolMockupInfo {
         pool_id: u64,
         app: OsmosisTestApp,
