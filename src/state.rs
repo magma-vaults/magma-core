@@ -2,22 +2,26 @@ use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Decimal, Deps, Int128, QuerierWrapper, SignedDecimal256, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
-    concentratedliquidity::v1beta1::Pool,
-    poolmanager::v1beta1::PoolmanagerQuerier
+    concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
 
 use readonly;
 
-use crate::{constants::MIN_TICK, error::ContractError, msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg}};
 use crate::constants::MAX_TICK;
+use crate::{
+    constants::MIN_TICK,
+    error::ContractError,
+    msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
+};
 use std::{cmp::min_by_key, str::FromStr};
 
-#[cw_serde] #[readonly::make]
+#[cw_serde]
+#[readonly::make]
 pub struct Weight(pub Decimal);
 impl Weight {
     pub const MAX: Decimal = Decimal::one();
 
-    pub fn new(value: &String) -> Option<Self> {
+    pub fn new(value: &str) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
     }
@@ -36,13 +40,19 @@ impl Weight {
         self.mul_dec(&Decimal::raw(value.into()))
     }
 
-    pub fn max() -> Self { Self(Self::MAX) }
-    pub fn is_zero(&self) -> bool { self.0 == Decimal::zero() }
-    pub fn is_max(&self) -> bool { self.0 == Weight::MAX }
-
+    pub fn max() -> Self {
+        Self(Self::MAX)
+    }
+    pub fn is_zero(&self) -> bool {
+        self.0 == Decimal::zero()
+    }
+    pub fn is_max(&self) -> bool {
+        self.0 == Weight::MAX
+    }
 }
 
-#[cw_serde] #[readonly::make]
+#[cw_serde]
+#[readonly::make]
 pub struct PositiveDecimal(pub Decimal);
 impl PositiveDecimal {
     pub fn new(value: &Decimal) -> Option<Self> {
@@ -66,7 +76,6 @@ impl PositiveDecimal {
 // TODO Use anyhow to propagate errors that I do not care about anyways
 //      (because theyre gonna get unwrapped).
 pub fn price_function_inv(p: &Decimal) -> i32 {
-
     let maybe_neg_pow = |exp: i32| {
         let ten = SignedDecimal256::from_str("10").unwrap();
         if exp >= 0 {
@@ -74,9 +83,9 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
             let exp: u32 = exp.try_into().unwrap();
             ten.checked_pow(exp).ok()
         } else {
-            SignedDecimal256::one().checked_div(
-                ten.checked_pow(exp.unsigned_abs()).ok()?
-            ).ok()
+            SignedDecimal256::one()
+                .checked_div(ten.checked_pow(exp.unsigned_abs()).ok()?)
+                .ok()
         }
     };
 
@@ -85,11 +94,14 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
         let x = floor_log_p.checked_mul(9)?.checked_sub(1)?;
 
         let x = maybe_neg_pow(floor_log_p)?
-            .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?).ok()?
-            .checked_add((*p).try_into().ok()?).ok()?;
+            .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?)
+            .ok()?
+            .checked_add(SignedDecimal256::from(*p))
+            .ok()?;
 
         let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
-            .checked_mul(x).ok()?;
+            .checked_mul(x)
+            .ok()?;
 
         let x: Int128 = x.to_int_floor().try_into().ok()?;
         x.i128().try_into().ok()
@@ -100,7 +112,8 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
     compute_price_inverse(p).unwrap()
 }
 
-#[cw_serde] #[readonly::make]
+#[cw_serde]
+#[readonly::make]
 pub struct PoolId(pub u64);
 impl PoolId {
     pub fn new(pool_id: u64, querier: &QuerierWrapper) -> Option<Self> {
@@ -114,7 +127,13 @@ impl PoolId {
     pub fn to_pool(&self, querier: &QuerierWrapper) -> Pool {
         let querier = PoolmanagerQuerier::new(querier);
         // Invariant: We already verified that `id` refers to a valid pool.
-        querier.pool(self.0).unwrap().pool.unwrap().try_into().unwrap()
+        querier
+            .pool(self.0)
+            .unwrap()
+            .pool
+            .unwrap()
+            .try_into()
+            .unwrap()
     }
 
     pub fn current_tick(&self, querier: &QuerierWrapper) -> i32 {
@@ -132,26 +151,30 @@ impl PoolId {
     pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
         // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
-        ((MIN_TICK + spacing + 1)/spacing) * spacing
+        ((MIN_TICK + spacing + 1) / spacing) * spacing
     }
 
     /// Max possible tick taking into account the pool tick spacing.
     pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        (MAX_TICK/spacing) * spacing
+        (MAX_TICK / spacing) * spacing
     }
 
     // TODO Unsafe operations to prove here. TODO Prove function semantics.
     pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        let lower = (value/spacing) * spacing;
+        let lower = (value / spacing) * spacing;
         // Invariant: Wont overflow because `i32::MAX <<< i64::MAX`
-        let upper = (value/spacing + 1) * spacing;
+        let upper = (value / spacing + 1) * spacing;
         let closest = min_by_key(lower, upper, |x| (x - value).abs());
 
-        if closest < MIN_TICK { self.min_valid_tick(querier) }
-        else if closest > MAX_TICK { self.max_valid_tick(querier) }
-        else { closest }
+        if closest < MIN_TICK {
+            self.min_valid_tick(querier)
+        } else if closest > MAX_TICK {
+            self.max_valid_tick(querier)
+        } else {
+            closest
+        }
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
@@ -179,26 +202,29 @@ impl PoolId {
     }
 }
 
-#[cw_serde] #[readonly::make]
+#[cw_serde]
+#[readonly::make]
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
-    pub fn new(value: &String) -> Option<Self> {
+    pub fn new(value: &str) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value >= Decimal::one()).then_some(Self(value))
     }
 
-    pub fn is_one(&self) -> bool { self.0 == Decimal::one() }
+    pub fn is_one(&self) -> bool {
+        self.0 == Decimal::one()
+    }
 
     // What even was this?
-    pub fn mul_or_max(&self, price: &Decimal) -> Decimal {
-        unimplemented!() 
+    // Idk, but if it is here it should do something...
+    pub fn mul_or_max(&self, _price: &Decimal) -> Decimal {
+        unimplemented!()
     }
 }
 
-pub fn raw<T: From<Uint128>>(d: &Decimal) -> T { d.atomics().into()  }
-
-
-
+pub fn raw<T: From<Uint128>>(d: &Decimal) -> T {
+    d.atomics().into()
+}
 
 #[cw_serde]
 pub struct VaultParameters {
@@ -218,49 +244,61 @@ pub struct VaultParameters {
 }
 
 impl VaultParameters {
-    pub fn new(
-        params: VaultParametersInstantiateMsg,
-    ) -> Result<Self, ContractError> {
-
+    pub fn new(params: VaultParametersInstantiateMsg) -> Result<Self, ContractError> {
         let base_factor = PriceFactor::new(&params.base_factor)
             .ok_or(ContractError::InvalidPriceFactor(params.base_factor))?;
-        
+
         let limit_factor = PriceFactor::new(&params.limit_factor)
             .ok_or(ContractError::InvalidPriceFactor(params.limit_factor))?;
 
         let full_range_weight = Weight::new(&params.full_range_weight)
             .ok_or(ContractError::InvalidWeight(params.full_range_weight))?;
 
-        
         // NOTE: We dont support vaults with idle capital for now.
-        match (full_range_weight.is_zero(), base_factor.is_one(), limit_factor.is_one()) {
+        match (
+            full_range_weight.is_zero(),
+            base_factor.is_one(),
+            limit_factor.is_one(),
+        ) {
             (true, true, true) => Err(ContractError::ContradictoryConfig {
-                reason: "All vault parameters will produce null positions, all capital would be idle".into()
+                reason:
+                    "All vault parameters will produce null positions, all capital would be idle"
+                        .into(),
             }),
-            (true, true, _) => Err(ContractError::ContradictoryConfig { 
-                reason: "A vault without balanced orders will have idle capital".into()
+            (true, true, _) => Err(ContractError::ContradictoryConfig {
+                reason: "A vault without balanced orders will have idle capital".into(),
             }),
-            (_, _, true) => Err(ContractError::ContradictoryConfig { 
-                reason: "A vault without a limit order will have idle capital".into()
+            (_, _, true) => Err(ContractError::ContradictoryConfig {
+                reason: "A vault without a limit order will have idle capital".into(),
             }),
-            (_, true, _) if !full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
-                reason: "If the vault doenst have a base order, the full range weight should be 1".into()
-            }),
-            (_, false, _) if full_range_weight.is_max() => Err(ContractError::ContradictoryConfig { 
-                reason: "If the full range weight is 1, the base factor should also be".into()
-            }),
-            _ => Ok(())
+            (_, true, _) if !full_range_weight.is_max() => {
+                Err(ContractError::ContradictoryConfig {
+                    reason:
+                        "If the vault doenst have a base order, the full range weight should be 1"
+                            .into(),
+                })
+            }
+            (_, false, _) if full_range_weight.is_max() => {
+                Err(ContractError::ContradictoryConfig {
+                    reason: "If the full range weight is 1, the base factor should also be".into(),
+                })
+            }
+            _ => Ok(()),
         }?;
 
         Ok(VaultParameters {
-            base_factor, limit_factor, full_range_weight
+            base_factor,
+            limit_factor,
+            full_range_weight,
         })
     }
 }
 
-#[cw_serde] #[readonly::make]
+#[cw_serde]
+#[readonly::make]
 pub struct VaultInfo {
-    #[readonly] pub pool_id: PoolId,
+    #[readonly]
+    pub pool_id: PoolId,
     pub admin: Option<Addr>,
     pub rebalancer: VaultRebalancer,
 }
@@ -275,18 +313,25 @@ impl VaultInfo {
         let rebalancer = VaultRebalancer::new(info.rebalancer, deps)?;
 
         let admin = if let Some(admin) = info.admin {
-            Some(deps.api.addr_validate(&admin)
-                .map_err(|_| ContractError::InvalidAdminAddress(admin))?)
-        } else { 
+            Some(
+                deps.api
+                    .addr_validate(&admin)
+                    .map_err(|_| ContractError::InvalidAdminAddress(admin))?,
+            )
+        } else {
             match rebalancer {
                 VaultRebalancer::Anyone {} => Ok(None),
-                _ => Err(ContractError::ContradictoryConfig { 
-                    reason: "If admin is none, the rebalancer can only be anyone".into()
-                })
+                _ => Err(ContractError::ContradictoryConfig {
+                    reason: "If admin is none, the rebalancer can only be anyone".into(),
+                }),
             }?
         };
 
-        Ok(VaultInfo { pool_id, rebalancer, admin })
+        Ok(VaultInfo {
+            pool_id,
+            rebalancer,
+            admin,
+        })
     }
 
     pub fn demon0(&self, querier: &QuerierWrapper) -> String {
@@ -310,30 +355,34 @@ pub enum VaultRebalancer {
 }
 
 impl VaultRebalancer {
-    pub fn new(rebalancer: VaultRebalancerInstantiateMsg, deps: Deps) -> Result<Self, ContractError> {
+    pub fn new(
+        rebalancer: VaultRebalancerInstantiateMsg,
+        deps: Deps,
+    ) -> Result<Self, ContractError> {
         use VaultRebalancerInstantiateMsg::*;
         match rebalancer {
             Delegate { rebalancer: x } => {
-                let rebalancer = deps.api.addr_validate(&x)
+                let rebalancer = deps
+                    .api
+                    .addr_validate(&x)
                     .map_err(|_| ContractError::InvalidDelegateAddress(x))?;
                 Ok(Self::Delegate { rebalancer })
-            },
+            }
             Admin {} => Ok(Self::Admin {}),
             Anyone {} => Ok(Self::Anyone {}),
-              
         }
     }
 }
 
 #[cw_serde]
 pub struct VaultState {
-    // Position Ids are optional because: 
+    // Position Ids are optional because:
     // 1. Positions are only created on rebalances.
-    // 2. If any of the vault positions is null, then those should 
+    // 2. If any of the vault positions is null, then those should
     //    be `None`, see `VaultParameters`.
     pub full_range_position_id: Option<u64>,
     pub base_position_id: Option<u64>,
-    pub limit_position_id: Option<u64>
+    pub limit_position_id: Option<u64>,
 }
 
 impl Default for VaultState {
@@ -347,18 +396,18 @@ impl VaultState {
         Self {
             full_range_position_id: None,
             base_position_id: None,
-            limit_position_id: None
+            limit_position_id: None,
         }
     }
 }
 
-/// VAULT_INFO Holds non-mathematical generally immutable information 
+/// VAULT_INFO Holds non-mathematical generally immutable information
 /// about the vault. Its generally immutable as in it can only be
 /// changed by the vault admin, but its state cant be changed with
 /// any business logic.
 pub const VAULT_INFO: Item<VaultInfo> = Item::new("vault_info");
 
-/// VAULT_PARAMETERS Holds mathematical generally immutable information 
+/// VAULT_PARAMETERS Holds mathematical generally immutable information
 /// about the vault. Its generally immutable as in it can only be
 /// changed by the vault admin, but its state cant be changed with
 /// any business logic.
