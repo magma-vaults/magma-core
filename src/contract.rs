@@ -938,6 +938,7 @@ mod exec {
             .add_submessages(new_position_msgs))
     }
 
+    // TODO Clean function.
     pub fn withdraw(
         WithdrawMsg {
             shares,
@@ -969,7 +970,12 @@ mod exec {
 
         let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps.as_ref(), &env);
 
-        // Invariant: We know that `info.sender` is a proper address, thus even if it didnt
+        // NOTE: We remove 3 tokens from each balance to prevent dust errors. Ie,
+        //       position withdrawals always leave 1 token behind.
+        let bal0 = bal0.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
+        let bal1 = bal1.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
+
+        // Invariant: We know that `info.sender` is a proper address, thus even if it didnt 
         //            any shares, the query would return Uint128::zero().
         let shares_held = query_balance(deps.as_ref(), info.sender.clone().into())
             .unwrap()
@@ -1078,27 +1084,17 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{
-        constants::{MAX_TICK, MIN_TICK},
-        msg::{
-            DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg,
-            VaultRebalancerInstantiateMsg,
-        },
-        state::price_function_inv,
-    };
+    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{Coin, Decimal};
-    use osmosis_std::types::osmosis::{
+    use cw20::BalanceResponse;
+    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, osmosis::{
         concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord,
-        },
-        poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
-    };
-    use osmosis_test_tube::{
-        Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager,
-        SigningAccount, Wasm,
-    };
+            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PositionByIdRequest
+        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}}
+    ;
+    use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
     // I don't kn ow why, but this instance of price is never read.
     struct PoolMockupInfo {
@@ -1133,8 +1129,8 @@ mod test {
                     denom0: USDC_DENOM.into(),
                     denom1: OSMO_DENOM.into(),
                     tick_spacing: 100,
-                    spread_factor: "0".into(),
-                }],
+                    spread_factor: Decimal::from_str("0.01").unwrap().atomics().into()
+                }]
             },
             deployer.address(),
             &deployer,
@@ -1515,5 +1511,86 @@ mod test {
             &pool_info.deployer,
         )
         .unwrap();
+    }
+
+    // I Would like to test fees distribution... How does it work? DO i have to trigger
+    // some governance thing? It doesnt look like fees get distributed as ez as with UniV3.
+    #[test]
+    fn deposit_withdrawal_rebalance_smoke_test() {
+        let (pool_x, pool_y) = (100_000, 200_000);
+        let pool_info = create_basic_usdc_osmo_pool(pool_x, pool_y);
+        let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into()
+        });
+
+        let (vault_x, vault_y) = (1_000, 1_500);
+        wasm.execute(
+            &vault_addr.0,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(vault_x),
+                amount1: Uint128::new(vault_y),
+                amount0_min: Uint128::new(vault_x),
+                amount1_min: Uint128::new(vault_y),
+                to: pool_info.deployer.address()
+            }),
+            &[
+                Coin::new(vault_x, USDC_DENOM).into(),
+                Coin::new(vault_y, OSMO_DENOM).into()
+            ],
+            &pool_info.deployer
+        ).unwrap();
+
+        let shares_got: BalanceResponse = wasm.query(
+            &vault_addr.0,
+            &QueryMsg::Balance { 
+                address: pool_info.deployer.address().into() 
+            }
+        ).unwrap();
+
+        wasm.execute(&vault_addr.0, &ExecuteMsg::Rebalance {}, &[], &pool_info.deployer)
+            .unwrap();
+
+        let pm = PoolManager::new(&pool_info.app);
+        pm.swap_exact_amount_in(
+            MsgSwapExactAmountIn {
+                sender: pool_info.deployer.address(),
+                routes: vec![SwapAmountInRoute {
+                    pool_id: pool_info.pool_id, token_out_denom: USDC_DENOM.into()
+                }],
+                token_in: Some(Coin::new(pool_y/2, OSMO_DENOM).into()),
+                token_out_min_amount: "1".into()
+            }, &pool_info.deployer
+        ).unwrap().data.token_out_amount;
+
+        let state: VaultState = wasm.query(&vault_addr.0, &QueryMsg::VaultPositions { }).unwrap();
+        println!("{:?}", state);
+
+        let cl = ConcentratedLiquidity::new(&pool_info.app);
+        let getpos = |id: Option<u64>| {
+            id.map(|position_id| cl.query_position_by_id(&PositionByIdRequest { position_id }))
+                .map(|x| x.unwrap().position.unwrap())
+        };
+
+        println!("{:?}", getpos(state.full_range_position_id).map(|p| p.claimable_spread_rewards));
+        println!("{:?}", getpos(state.base_position_id).map(|p| p.claimable_spread_rewards));
+        println!("{:?}", getpos(state.limit_position_id).map(|p| p.claimable_spread_rewards));
+
+        let shares_got = shares_got.balance;
+
+        wasm.execute(
+            &vault_addr.0, 
+            &ExecuteMsg::Withdraw(
+                WithdrawMsg {
+                    shares: shares_got,
+                    amount0_min: Uint128::zero(),
+                    amount1_min: Uint128::zero(),
+                    to: pool_info.deployer.address()
+                }
+            ),
+            &[],
+            &pool_info.deployer
+        ).unwrap();
     }
 }
