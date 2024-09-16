@@ -24,18 +24,15 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-    // TODO Better Error types!!!!
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     // Invaraint: `VaultInfo` serialization should never fail.
     VAULT_INFO.save(deps.storage, &vault_info).unwrap();
 
     let vault_parameters = VaultParameters::new(msg.vault_parameters)?;
     // Invariant: `VaultParameters` serialization should never fail.
-    VAULT_PARAMETERS
-        .save(deps.storage, &vault_parameters)
-        .unwrap();
+    VAULT_PARAMETERS.save(deps.storage, &vault_parameters).unwrap();
 
-    let vault_state = VaultState::new();
+    let vault_state = VaultState::default();
     // Invariant: `VaultState` serialization should never fail.
     VAULT_STATE.save(deps.storage, &vault_state).unwrap();
 
@@ -77,295 +74,6 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         VaultPositions {} => {
             // Invariant: Any state is present after instantiation.
             Ok(to_json_binary(&VAULT_STATE.load(deps.storage).unwrap())?)
-        }
-    }
-}
-
-mod query {
-    use std::str::FromStr;
-
-    use osmosis_std::types::{
-        cosmos::bank::v1beta1::BankQuerier,
-        osmosis::concentratedliquidity::v1beta1::PositionByIdRequest,
-    };
-
-    use cosmwasm_std::Uint256;
-
-    use super::*;
-    use crate::msg::PositionType;
-
-    pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
-        use PositionType::*;
-        let full_range_balances = position_balances_with_fees(FullRange, deps);
-        let base_balances = position_balances_with_fees(Base, deps);
-        let limit_balances = position_balances_with_fees(Limit, deps);
-
-        // Invariant: `VAULT_INFO` will always be present after instantiation.
-        let (denom0, denom1) = VAULT_INFO
-            .load(deps.storage)
-            .unwrap()
-            .pool_id
-            .denoms(&deps.querier);
-
-        let balances = BankQuerier::new(&deps.querier);
-        let contract_addr = env.contract.address.to_string();
-
-        // Invariant: Wont return `None` becuase we verify the pool and
-        //            denoms are proper during instantiation.
-        let contract_balance0 = balances
-            .balance(contract_addr.clone(), denom0.clone())
-            .ok()
-            .unwrap()
-            .balance
-            .unwrap()
-            .amount;
-
-        let contract_balance1 = balances
-            .balance(contract_addr, denom1.clone())
-            .ok()
-            .unwrap()
-            .balance
-            .unwrap()
-            .amount;
-
-        // Invariant: The conversion wont fail, because we got the
-        //            contract balances directly from `BankQuerier.
-        //            The additions wont overflow, because for that
-        //            the token supply would have to be above
-        //            `Uint128::MAX`, but thats not possible.
-        let bal0 = Uint128::from_str(&contract_balance0)
-            .unwrap()
-            .checked_add(full_range_balances.bal0)
-            .unwrap()
-            .checked_add(base_balances.bal0)
-            .unwrap()
-            .checked_add(limit_balances.bal0)
-            .unwrap();
-
-        let bal1 = Uint128::from_str(&contract_balance1)
-            .unwrap()
-            .checked_add(full_range_balances.bal1)
-            .unwrap()
-            .checked_add(base_balances.bal1)
-            .unwrap()
-            .checked_add(limit_balances.bal1)
-            .unwrap();
-
-        VaultBalancesResponse { bal0, bal1 }
-    }
-
-    pub fn position_balances_with_fees(
-        position_type: PositionType,
-        deps: Deps,
-    ) -> PositionBalancesWithFeesResponse {
-        // Invariant: `VAULT_INFO` should always be present after instantiation.
-        let (denom0, denom1) = VAULT_INFO
-            .load(deps.storage)
-            .unwrap()
-            .pool_id
-            .denoms(&deps.querier);
-
-        // Invariant: `VAULT_STATE` should always be present after instantiation.
-        let VaultState {
-            full_range_position_id,
-            base_position_id,
-            limit_position_id,
-        } = VAULT_STATE.load(deps.storage).unwrap();
-
-        use PositionType::*;
-        let id = match position_type {
-            FullRange => full_range_position_id,
-            Base => base_position_id,
-            Limit => limit_position_id,
-        };
-
-        if id.is_none() {
-            return PositionBalancesWithFeesResponse {
-                bal0: Uint128::zero(),
-                bal1: Uint128::zero(),
-            };
-        }
-        let id = id.unwrap();
-
-        // Invariant: We verified `id` is a valid position id the moment
-        //            we put it in the state, so the query wont fail.
-        let pos = PositionByIdRequest { position_id: id }
-            .query(&deps.querier)
-            .unwrap()
-            .position
-            .unwrap();
-
-        // Invariant: If position is valid, both assets will be always present.
-        let asset0 = pos.asset0.unwrap();
-        let asset1 = pos.asset1.unwrap();
-        let rewards = pos.claimable_spread_rewards;
-
-        assert!(denom0 == asset0.denom && denom1 == asset1.denom);
-
-        // Invariant: If `rewards` is present, we know its a `Vec` of valid
-        //            amounts, so the conversion will never fail.
-        let rewards0 = rewards
-            .iter()
-            .find(|x| x.denom == denom0)
-            .map(|x| Uint128::from_str(&x.amount))
-            .unwrap_or(Ok(Uint128::zero()))
-            .unwrap();
-
-        let rewards1 = rewards
-            .iter()
-            .find(|x| x.denom == denom1)
-            .map(|x| Uint128::from_str(&x.amount))
-            .unwrap_or(Ok(Uint128::zero()))
-            .unwrap();
-
-        // Invariant: Will never panic, because if the position has amounts
-        //            `amount0` and `amount1`, we know theyre valid `Uint128`s.
-        //            Neither will the addition overflow, because balances
-        //            could only overflow if the tokens they refer had
-        //            supplies above `Uint128::MAX`, but thats not possible.
-        let bal0 = Uint128::from_str(&asset0.amount)
-            .unwrap()
-            .checked_add(rewards0)
-            .unwrap();
-        let bal1 = Uint128::from_str(&asset1.amount)
-            .unwrap()
-            .checked_add(rewards1)
-            .unwrap();
-
-        PositionBalancesWithFeesResponse { bal0, bal1 }
-    }
-
-    pub fn calc_shares_and_usable_amounts(
-        input_amount0: Uint128,
-        input_amount1: Uint128,
-        amounts_already_in_contract: bool,
-        deps: Deps,
-        env: &Env,
-    ) -> CalcSharesAndUsableAmountsResponse {
-        let VaultBalancesResponse {
-            bal0: total0,
-            bal1: total1,
-        } = query::vault_balances(deps, env);
-
-        let (total0, total1) = if amounts_already_in_contract {
-            (
-                total0.checked_sub(input_amount0).unwrap(),
-                total1.checked_sub(input_amount1).unwrap(),
-            )
-        } else {
-            (total0, total1)
-        };
-
-        // Invariant: `TOKEN_INFO` always present after instantiation.
-        let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
-
-        if total_supply.is_zero() {
-            assert!(total0.is_zero() && total1.is_zero());
-
-            CalcSharesAndUsableAmountsResponse {
-                shares: (cmp::max(input_amount0, input_amount1)),
-                usable_amount0: input_amount0,
-                usable_amount1: input_amount1,
-            }
-        } else if total0.is_zero() {
-            // Invariant: If there are shares and there are no tokens
-            //            denom0 in the vault, then the shares must
-            //            be for the token denom1.
-            assert!(!total1.is_zero());
-
-            // Invariant: The multiplication wont overflow becuase we
-            //            lifted the amount to `Uint256`. The division
-            //            wont fail becuase we just ensured `total1`
-            //            is not zero. The downgrade back to `Uint128`
-            //            wont fail because we divided proportionally
-            //            by `total1`. The same reasoning applies to
-            //            the rest of branches.
-            let shares = Uint256::from(input_amount1)
-                .checked_mul(total_supply.into())
-                .unwrap()
-                .checked_div(total1.into())
-                .unwrap()
-                .try_into()
-                .unwrap();
-
-            CalcSharesAndUsableAmountsResponse {
-                shares,
-                usable_amount0: Uint128::zero(),
-                usable_amount1: input_amount1,
-            }
-        } else if total1.is_zero() {
-            // Invariant: If there are shares and there are no tokens
-            //            denom1 in the vault, then the shares must
-            //            be for the token denom0.
-            assert!(!total0.is_zero());
-
-            let shares = Uint256::from(input_amount0)
-                .checked_mul(total_supply.into())
-                .unwrap()
-                .checked_div(total0.into())
-                .unwrap()
-                .try_into()
-                .unwrap();
-
-            CalcSharesAndUsableAmountsResponse {
-                shares,
-                usable_amount0: input_amount0,
-                usable_amount1: Uint128::zero(),
-            }
-        } else {
-            let input_amount0: Uint256 = input_amount0.into();
-            let input_amount1: Uint256 = input_amount1.into();
-            let total0: Uint256 = total0.into();
-            let total1: Uint256 = total1.into();
-
-            let cross = cmp::min(
-                input_amount0.checked_mul(total1).unwrap(),
-                input_amount1.checked_mul(total0).unwrap(),
-            );
-
-            if cross.is_zero() {
-                return CalcSharesAndUsableAmountsResponse {
-                    shares: Uint128::zero(),
-                    usable_amount0: Uint128::zero(),
-                    usable_amount1: Uint128::zero(),
-                };
-            }
-
-            let usable_amount0 = cross
-                .checked_sub(Uint256::one())
-                .unwrap()
-                .checked_div(total1)
-                .unwrap()
-                .checked_add(Uint256::one())
-                .unwrap()
-                .try_into()
-                .unwrap();
-
-            let usable_amount1 = cross
-                .checked_sub(Uint256::one())
-                .unwrap()
-                .checked_div(total0)
-                .unwrap()
-                .checked_add(Uint256::one())
-                .unwrap()
-                .try_into()
-                .unwrap();
-
-            let shares = cross
-                .checked_mul(total_supply.into())
-                .unwrap()
-                .checked_div(total0)
-                .unwrap()
-                .checked_div(total1)
-                .unwrap()
-                .try_into()
-                .unwrap();
-
-            CalcSharesAndUsableAmountsResponse {
-                shares,
-                usable_amount0,
-                usable_amount1,
-            }
         }
     }
 }
@@ -983,12 +691,14 @@ mod exec {
 
         let shares_held = Decimal::raw(shares_held.into());
         let total_shares_supply = Decimal::raw(total_shares_supply.into());
-        // TODO Invariant: Wont panic bla bla
         // Invariant: We already verified `total_shares_supply` is not zero,
         //            and we also know that it will always be larger than `shares_held`,
-        //            thus the division cant overflow.
-        let shares_proportion =
-            Weight::from_decimal(&shares_held.checked_div(total_shares_supply).unwrap()).unwrap();
+        //            thus the division cant overflow. Also, because the shares will
+        //            always be smaller than the total supply, the resulting division
+        //            will always be a valid Weight.
+        let shares_proportion = Weight::try_from(
+            shares_held.checked_div(total_shares_supply).unwrap()
+        ).unwrap();
 
         // Invariant: Wont overflow because we lifted to Uint256. Wont produce a division
         //            by zero error because for shares to exist, the total supply has
@@ -1089,19 +799,19 @@ mod test {
     use super::*;
     use cosmwasm_std::{Coin, Decimal};
     use cw20::BalanceResponse;
-    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, osmosis::{
+    use osmosis_std::types::osmosis::{
         concentratedliquidity::v1beta1::{
             CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PositionByIdRequest
-        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}}
+        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}
     ;
-    use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
+    use osmosis_test_tube::{Account, ConcentratedLiquidity, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
     // I don't kn ow why, but this instance of price is never read.
     struct PoolMockupInfo {
         pool_id: u64,
         app: OsmosisTestApp,
         deployer: SigningAccount,
-        price: Decimal,
+        _price: Decimal,
     }
 
     const USDC_DENOM: &str = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
@@ -1163,7 +873,7 @@ mod test {
             pool_id,
             app,
             deployer,
-            price: Decimal::new(y_bal.into()) / Decimal::new(x_bal.into()),
+            _price: Decimal::new(y_bal.into()) / Decimal::new(x_bal.into()),
         }
     }
 
@@ -1513,8 +1223,6 @@ mod test {
         .unwrap();
     }
 
-    // I Would like to test fees distribution... How does it work? DO i have to trigger
-    // some governance thing? It doesnt look like fees get distributed as ez as with UniV3.
     #[test]
     fn deposit_withdrawal_rebalance_smoke_test() {
         let (pool_x, pool_y) = (100_000, 200_000);

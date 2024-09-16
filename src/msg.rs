@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 use cw20::BalanceResponse;
-use crate::state::VaultState;
+use crate::state::{PositionType, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -76,15 +76,13 @@ pub enum QueryMsg {
 }
 
 #[cw_serde]
-pub enum PositionType { FullRange, Base, Limit }
-
-#[cw_serde]
 pub struct VaultBalancesResponse {
     pub bal0: Uint128,
     pub bal1: Uint128
 }
 
 #[cw_serde]
+#[derive(Default)]
 pub struct PositionBalancesWithFeesResponse {
     pub bal0: Uint128,
     pub bal1: Uint128

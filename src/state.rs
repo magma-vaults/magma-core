@@ -8,6 +8,7 @@ use osmosis_std::types::osmosis::{
 use readonly;
 
 use crate::constants::MAX_TICK;
+use crate::error::InstantiationError;
 use crate::{
     constants::MIN_TICK,
     error::ContractError,
@@ -24,11 +25,6 @@ impl Weight {
     pub fn new(value: &str) -> Option<Self> {
         let value = Decimal::from_str(value).ok()?;
         (value <= Self::MAX).then_some(Self(value))
-    }
-
-    // TODO Use From trait.
-    pub fn from_decimal(value: &Decimal) -> Option<Self> {
-        (*value <= Self::MAX).then_some(Self(*value))
     }
 
     pub fn mul_dec(&self, value: &Decimal) -> Decimal {
@@ -48,6 +44,14 @@ impl Weight {
     }
     pub fn is_max(&self) -> bool {
         self.0 == Weight::MAX
+    }
+}
+
+impl TryFrom<Decimal> for Weight {
+    type Error = ();
+    fn try_from(value: Decimal) -> Result<Self, Self::Error> {
+        if value > Self::MAX { Err(()) } 
+        else { Ok(Self(value)) }
     }
 }
 
@@ -188,18 +192,6 @@ impl PoolId {
         //            returns valid `Decimal` prices.
         Decimal::from_str(&p).unwrap()
     }
-
-    pub fn denom0(&self, querier: &QuerierWrapper) -> String {
-        self.to_pool(querier).token0
-    }
-
-    pub fn denom1(&self, querier: &QuerierWrapper) -> String {
-        self.to_pool(querier).token1
-    }
-
-    pub fn denoms(&self, querier: &QuerierWrapper) -> (String, String) {
-        (self.denom0(querier), self.denom1(querier))
-    }
 }
 
 #[cw_serde]
@@ -244,46 +236,51 @@ pub struct VaultParameters {
 }
 
 impl VaultParameters {
-    pub fn new(params: VaultParametersInstantiateMsg) -> Result<Self, ContractError> {
+    pub fn new(params: VaultParametersInstantiateMsg) -> Result<Self, InstantiationError> {
+        use InstantiationError::*;
         let base_factor = PriceFactor::new(&params.base_factor)
-            .ok_or(ContractError::InvalidPriceFactor(params.base_factor))?;
+            .ok_or(InvalidPriceFactor(params.base_factor))?;
 
         let limit_factor = PriceFactor::new(&params.limit_factor)
-            .ok_or(ContractError::InvalidPriceFactor(params.limit_factor))?;
+            .ok_or(InvalidPriceFactor(params.limit_factor))?;
 
         let full_range_weight = Weight::new(&params.full_range_weight)
-            .ok_or(ContractError::InvalidWeight(params.full_range_weight))?;
+            .ok_or(InvalidWeight(params.full_range_weight))?;
 
-        // NOTE: We dont support vaults with idle capital for now.
+        // NOTE: We dont support vaults with idle capital nor less than 3 positions for now.
+        //       Integrating both options is trivial, but we keep it simple for the v1.
         match (
             full_range_weight.is_zero(),
             base_factor.is_one(),
             limit_factor.is_one(),
         ) {
-            (true, true, true) => Err(ContractError::ContradictoryConfig {
+            (false, false, false) => Ok(()),
+            (true, true, true) => Err(ContradictoryConfig {
                 reason:
                     "All vault parameters will produce null positions, all capital would be idle"
                         .into(),
             }),
-            (true, true, _) => Err(ContractError::ContradictoryConfig {
+            (true, true, _) => Err(ContradictoryConfig {
                 reason: "A vault without balanced orders will have idle capital".into(),
             }),
-            (_, _, true) => Err(ContractError::ContradictoryConfig {
+            (_, _, true) => Err(ContradictoryConfig {
                 reason: "A vault without a limit order will have idle capital".into(),
             }),
             (_, true, _) if !full_range_weight.is_max() => {
-                Err(ContractError::ContradictoryConfig {
+                Err(ContradictoryConfig {
                     reason:
                         "If the vault doenst have a base order, the full range weight should be 1"
                             .into(),
                 })
             }
             (_, false, _) if full_range_weight.is_max() => {
-                Err(ContractError::ContradictoryConfig {
+                Err(ContradictoryConfig {
                     reason: "If the full range weight is 1, the base factor should also be".into(),
                 })
             }
-            _ => Ok(()),
+            _ => Err(ContradictoryConfig {
+                reason: "We dont support vaults with less than 3 positions or now".into()
+            }),
         }?;
 
         Ok(VaultParameters {
@@ -293,6 +290,32 @@ impl VaultParameters {
         })
     }
 }
+
+// FIXME This shouldnt be here.
+/// Used to chain anyhow::Result computations 
+/// without closure boilerplate.
+#[macro_export]
+macro_rules! do_ok {
+    ($($code:tt)*) => {
+        (|| -> ::anyhow::Result<_> {
+            Ok($($code)*)
+        })()
+    }
+}
+
+/// Used to build do-notation like blocks with anyhow::Result 
+/// without closure boilerplate.
+#[macro_export]
+macro_rules! do_me {
+    ($($body:tt)*) => {
+        (|| -> ::anyhow::Result<_> {
+            Ok({
+                $($body)*
+            })
+        })()
+    }
+}
+
 
 #[cw_serde]
 #[readonly::make]
@@ -304,9 +327,10 @@ pub struct VaultInfo {
 }
 
 impl VaultInfo {
-    pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, ContractError> {
+    pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, InstantiationError> {
+        use InstantiationError::*;
         let pool_id = PoolId::new(info.pool_id, &deps.querier)
-            .ok_or(ContractError::InvalidPoolId(info.pool_id))?;
+            .ok_or(InvalidPoolId(info.pool_id))?;
 
         assert!(pool_id.0 == info.pool_id);
 
@@ -316,12 +340,12 @@ impl VaultInfo {
             Some(
                 deps.api
                     .addr_validate(&admin)
-                    .map_err(|_| ContractError::InvalidAdminAddress(admin))?,
+                    .map_err(|_| InvalidAdminAddress(admin))?,
             )
         } else {
             match rebalancer {
                 VaultRebalancer::Anyone {} => Ok(None),
-                _ => Err(ContractError::ContradictoryConfig {
+                _ => Err(ContradictoryConfig {
                     reason: "If admin is none, the rebalancer can only be anyone".into(),
                 }),
             }?
@@ -341,6 +365,10 @@ impl VaultInfo {
     pub fn demon1(&self, querier: &QuerierWrapper) -> String {
         self.pool_id.to_pool(querier).token1
     }
+
+    pub fn denoms(&self, querier: &QuerierWrapper) -> (String, String) {
+        (self.demon0(querier), self.demon1(querier))
+    }
 }
 
 #[cw_serde]
@@ -358,14 +386,14 @@ impl VaultRebalancer {
     pub fn new(
         rebalancer: VaultRebalancerInstantiateMsg,
         deps: Deps,
-    ) -> Result<Self, ContractError> {
+    ) -> Result<Self, InstantiationError> {
         use VaultRebalancerInstantiateMsg::*;
         match rebalancer {
             Delegate { rebalancer: x } => {
                 let rebalancer = deps
                     .api
                     .addr_validate(&x)
-                    .map_err(|_| ContractError::InvalidDelegateAddress(x))?;
+                    .map_err(|_| InstantiationError::InvalidDelegateAddress(x))?;
                 Ok(Self::Delegate { rebalancer })
             }
             Admin {} => Ok(Self::Admin {}),
@@ -375,31 +403,32 @@ impl VaultRebalancer {
 }
 
 #[cw_serde]
+pub enum PositionType { FullRange, Base, Limit }
+
+type MaybePositionId = Option<u64>;
+
+#[cw_serde]
+#[derive(Default)]
 pub struct VaultState {
     // Position Ids are optional because:
     // 1. Positions are only created on rebalances.
     // 2. If any of the vault positions is null, then those should
     //    be `None`, see `VaultParameters`.
-    pub full_range_position_id: Option<u64>,
-    pub base_position_id: Option<u64>,
-    pub limit_position_id: Option<u64>,
-}
-
-impl Default for VaultState {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub full_range_position_id: MaybePositionId,
+    pub base_position_id: MaybePositionId,
+    pub limit_position_id: MaybePositionId
 }
 
 impl VaultState {
-    pub fn new() -> Self {
-        Self {
-            full_range_position_id: None,
-            base_position_id: None,
-            limit_position_id: None,
+    pub fn from_position_type(&self, position_type: PositionType) -> MaybePositionId {
+        match position_type {
+            PositionType::FullRange => self.full_range_position_id,
+            PositionType::Base => self.base_position_id,
+            PositionType::Limit => self.limit_position_id,
         }
     }
 }
+
 
 /// VAULT_INFO Holds non-mathematical generally immutable information
 /// about the vault. Its generally immutable as in it can only be
