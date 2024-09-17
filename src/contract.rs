@@ -2,7 +2,7 @@ use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
     StdResult, Uint128,
 };
-use cw20_base::contract::query_balance;
+use cw20_base::contract::{query_balance, query_token_info};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 
@@ -73,7 +73,8 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         VaultPositions {} => {
             // Invariant: Any state is present after instantiation.
             to_json_binary(&VAULT_STATE.load(deps.storage).unwrap())
-        }
+        },
+        TokenInfo {} => to_json_binary(&query_token_info(deps)?)
     }
 }
 

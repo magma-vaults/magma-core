@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
-use cw20::BalanceResponse;
+use cw20::{BalanceResponse, TokenInfoResponse};
 use crate::state::{PositionType, VaultState};
 
 #[cw_serde]
@@ -72,7 +72,9 @@ pub enum QueryMsg {
     #[returns(BalanceResponse)]
     Balance { address: String },
     #[returns(VaultState)]
-    VaultPositions {}
+    VaultPositions {},
+    #[returns(TokenInfoResponse)]
+    TokenInfo {}
 }
 
 #[cw_serde]
