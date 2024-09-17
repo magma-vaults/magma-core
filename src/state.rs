@@ -1,17 +1,18 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, Int128, QuerierWrapper, SignedDecimal256, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
+use anyhow::Error;
 
 use readonly;
 
 use crate::constants::MAX_TICK;
+use crate::do_ok;
 use crate::error::InstantiationError;
 use crate::{
     constants::MIN_TICK,
-    error::ContractError,
     msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
 };
 use std::{cmp::min_by_key, str::FromStr};
@@ -39,9 +40,11 @@ impl Weight {
     pub fn max() -> Self {
         Self(Self::MAX)
     }
+
     pub fn is_zero(&self) -> bool {
         self.0 == Decimal::zero()
     }
+
     pub fn is_max(&self) -> bool {
         self.0 == Weight::MAX
     }
@@ -76,46 +79,6 @@ impl PositiveDecimal {
     }
 }
 
-// TODO Check proof for output type `i32`, not `i64`.
-// TODO Use anyhow to propagate errors that I do not care about anyways
-//      (because theyre gonna get unwrapped).
-pub fn price_function_inv(p: &Decimal) -> i32 {
-    let maybe_neg_pow = |exp: i32| {
-        let ten = SignedDecimal256::from_str("10").unwrap();
-        if exp >= 0 {
-            // Invariant: We just verified that `exp` is unsigned.
-            let exp: u32 = exp.try_into().unwrap();
-            ten.checked_pow(exp).ok()
-        } else {
-            SignedDecimal256::one()
-                .checked_div(ten.checked_pow(exp.unsigned_abs()).ok()?)
-                .ok()
-        }
-    };
-
-    let compute_price_inverse = |p| {
-        let floor_log_p = PositiveDecimal::new(p)?.floorlog10();
-        let x = floor_log_p.checked_mul(9)?.checked_sub(1)?;
-
-        let x = maybe_neg_pow(floor_log_p)?
-            .checked_mul(SignedDecimal256::from_str(&x.to_string()).ok()?)
-            .ok()?
-            .checked_add(SignedDecimal256::from(*p))
-            .ok()?;
-
-        let x = maybe_neg_pow(6i32.checked_sub(floor_log_p)?)?
-            .checked_mul(x)
-            .ok()?;
-
-        let x: Int128 = x.to_int_floor().try_into().ok()?;
-        x.i128().try_into().ok()
-    };
-
-    // Invariant: Price function inverse computation doesnt overflow under i256.
-    //     Proof: See whitepaper theorem 5.
-    compute_price_inverse(p).unwrap()
-}
-
 #[cw_serde]
 #[readonly::make]
 pub struct PoolId(pub u64);
@@ -130,66 +93,24 @@ impl PoolId {
 
     pub fn to_pool(&self, querier: &QuerierWrapper) -> Pool {
         let querier = PoolmanagerQuerier::new(querier);
-        // Invariant: We already verified that `id` refers to a valid pool.
-        querier
-            .pool(self.0)
-            .unwrap()
-            .pool
-            .unwrap()
-            .try_into()
-            .unwrap()
-    }
-
-    pub fn current_tick(&self, querier: &QuerierWrapper) -> i32 {
-        // TODO Prove and use safe conversions.
-        self.to_pool(querier).current_tick as i32
-    }
-
-    pub fn tick_spacing(&self, querier: &QuerierWrapper) -> i32 {
-        // TODO: Use safe conversions.
-        // Invariant: Wont overflow under reasonable conditions.
-        self.to_pool(querier).tick_spacing as i32
-    }
-
-    /// Min possible tick taking into account the pool tick spacing.
-    pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
-        let spacing = self.tick_spacing(querier);
-        // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
-        ((MIN_TICK + spacing + 1) / spacing) * spacing
-    }
-
-    /// Max possible tick taking into account the pool tick spacing.
-    pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
-        let spacing = self.tick_spacing(querier);
-        (MAX_TICK / spacing) * spacing
-    }
-
-    // TODO Unsafe operations to prove here. TODO Prove function semantics.
-    pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
-        let spacing = self.tick_spacing(querier);
-        let lower = (value / spacing) * spacing;
-        // Invariant: Wont overflow because `i32::MAX <<< i64::MAX`
-        let upper = (value / spacing + 1) * spacing;
-        let closest = min_by_key(lower, upper, |x| (x - value).abs());
-
-        if closest < MIN_TICK {
-            self.min_valid_tick(querier)
-        } else if closest > MAX_TICK {
-            self.max_valid_tick(querier)
-        } else {
-            closest
-        }
+        // Invariant: We already verified that the id refers to a valid pool the
+        //            moment we constructed `self`.
+        do_ok!(querier
+            .pool(self.0)?
+            .pool.ok_or(Error::msg("impossible"))?
+            .try_into().unwrap() // FIXME Why cant I `?`?
+        ).unwrap()
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
         let pool = self.to_pool(querier);
+        // Invariant: We already verified the params are proper the moment we constructed `self`.
         let p = PoolmanagerQuerier::new(querier)
             .spot_price(pool.id, pool.token0, pool.token1)
-            .unwrap() // Invariant: We already verified the params are proper.
+            .unwrap()
             .spot_price;
 
-        // Invariant: We know that `querier.spot_price(...)`
-        //            returns valid `Decimal` prices.
+        // Invariant: We know that `querier.spot_price(...)` returns valid `Decimal` prices.
         Decimal::from_str(&p).unwrap()
     }
 }
@@ -206,16 +127,6 @@ impl PriceFactor {
     pub fn is_one(&self) -> bool {
         self.0 == Decimal::one()
     }
-
-    // What even was this?
-    // Idk, but if it is here it should do something...
-    pub fn mul_or_max(&self, _price: &Decimal) -> Decimal {
-        unimplemented!()
-    }
-}
-
-pub fn raw<T: From<Uint128>>(d: &Decimal) -> T {
-    d.atomics().into()
 }
 
 #[cw_serde]
@@ -291,32 +202,6 @@ impl VaultParameters {
     }
 }
 
-// FIXME This shouldnt be here.
-/// Used to chain anyhow::Result computations 
-/// without closure boilerplate.
-#[macro_export]
-macro_rules! do_ok {
-    ($($code:tt)*) => {
-        (|| -> ::anyhow::Result<_> {
-            Ok($($code)*)
-        })()
-    }
-}
-
-/// Used to build do-notation like blocks with anyhow::Result 
-/// without closure boilerplate.
-#[macro_export]
-macro_rules! do_me {
-    ($($body:tt)*) => {
-        (|| -> ::anyhow::Result<_> {
-            Ok({
-                $($body)*
-            })
-        })()
-    }
-}
-
-
 #[cw_serde]
 #[readonly::make]
 pub struct VaultInfo {
@@ -368,6 +253,51 @@ impl VaultInfo {
 
     pub fn denoms(&self, querier: &QuerierWrapper) -> (String, String) {
         (self.demon0(querier), self.demon1(querier))
+    }
+
+    pub fn pool(&self, querier: &QuerierWrapper) -> Pool {
+        self.pool_id.to_pool(querier)
+    }
+
+    pub fn current_tick(&self, querier: &QuerierWrapper) -> i32 {
+        // TODO Prove and use safe conversions.
+        self.pool(querier).current_tick as i32
+    }
+
+    pub fn tick_spacing(&self, querier: &QuerierWrapper) -> i32 {
+        // TODO: Use safe conversions.
+        // Invariant: Wont overflow under reasonable conditions.
+        self.pool(querier).tick_spacing as i32
+    }
+
+    /// Min possible tick taking into account the pool tick spacing.
+    pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
+        let spacing = self.tick_spacing(querier);
+        // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
+        ((MIN_TICK + spacing + 1) / spacing) * spacing
+    }
+
+    /// Max possible tick taking into account the pool tick spacing.
+    pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
+        let spacing = self.tick_spacing(querier);
+        (MAX_TICK / spacing) * spacing
+    }
+
+    // TODO Unsafe operations to prove here. TODO Prove function semantics.
+    pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
+        let spacing = self.tick_spacing(querier);
+        let lower = (value / spacing) * spacing;
+        // Invariant: Wont overflow because `i32::MAX <<< i64::MAX`
+        let upper = (value / spacing + 1) * spacing;
+        let closest = min_by_key(lower, upper, |x| (x - value).abs());
+
+        if closest < MIN_TICK {
+            self.min_valid_tick(querier)
+        } else if closest > MAX_TICK {
+            self.max_valid_tick(querier)
+        } else {
+            closest
+        }
     }
 }
 

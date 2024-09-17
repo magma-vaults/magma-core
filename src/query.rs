@@ -116,7 +116,7 @@ pub fn position_balances_with_fees(
     }.unwrap()
 }
 
-// TODO FIXME
+// How can I fix this ugly flag!
 pub fn calc_shares_and_usable_amounts(
     input_amount0: Uint128,
     input_amount1: Uint128,
@@ -147,7 +147,7 @@ pub fn calc_shares_and_usable_amounts(
         assert!(total0.is_zero() && total1.is_zero());
 
         CalcSharesAndUsableAmountsResponse {
-            shares: (cmp::max(input_amount0, input_amount1)),
+            shares: cmp::max(input_amount0, input_amount1),
             usable_amount0: input_amount0,
             usable_amount1: input_amount1,
         }
@@ -207,11 +207,7 @@ pub fn calc_shares_and_usable_amounts(
             );
 
             if cross.is_zero() {
-                return Ok(CalcSharesAndUsableAmountsResponse {
-                    shares: Uint128::zero(),
-                    usable_amount0: Uint128::zero(),
-                    usable_amount1: Uint128::zero(),
-                });
+                return Ok(CalcSharesAndUsableAmountsResponse::default())
             }
 
             let usable_amount0 = cross

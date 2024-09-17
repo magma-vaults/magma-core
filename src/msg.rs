@@ -89,6 +89,7 @@ pub struct PositionBalancesWithFeesResponse {
 }
 
 #[cw_serde]
+#[derive(Default)]
 pub struct CalcSharesAndUsableAmountsResponse {
     pub shares: Uint128,
     pub usable_amount0: Uint128,

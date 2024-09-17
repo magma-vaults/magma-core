@@ -1,4 +1,3 @@
-
 use cosmwasm_std::StdError;
 use cw_utils::PaymentError;
 use thiserror::Error;
@@ -18,46 +17,14 @@ pub enum ContractError {
     #[error("Instantiation error: {0}")]
     Instantiation(#[from] InstantiationError),
 
-    // Instantiation errors.
+    #[error("Deposit error: {0}")]
+    Deposit(#[from] DepositError),
 
-    // Deposit errors.
-    #[error("Improper balances: expected {expected} but got {got}")]
-    ImproperSentAmounts { expected: String, got: String },
+    #[error("Rebalance error: {0}")]
+    Rebalance(#[from] RebalanceError),
 
-    #[error("Nothing to deposit, user sent 0 tokens")]
-    ZeroTokensSent {},
-
-    #[error("Cant mint vault shares to itself ({0})")]
-    ShareholderCantBeContract(String),
-
-    #[error("Used amounts below min wanted amounts: used: {used}, wanted: {wanted}")]
-    DepositedAmontsBelowMin { used: String, wanted: String },
-
-    #[error("Invalid shareholder address: {0}")]
-    InvalidShareholderAddress(String),
-
-    // Rebalance errors.
-    #[error("You cant rebalance a vault without funds")]
-    NothingToRebalance {},
-
-    #[error("Pool with id {0} is empty, and thus has no price")]
-    PoolWithoutPrice(u64),
-
-    // Withdraw erors.
-    #[error("Cant withdraw 0 shares")]
-    ZeroSharesWithdrawal {},
-
-    #[error("Trying to withdraw to improper address {0}")]
-    InvalidWithdrawalAddress(String),
-    
-    #[error("Cant withdraw to itself ({0})")]
-    CantWithdrawToContract(String),
-
-    #[error("Trying to withdraw more shares than owned (owned: {owned}, withdrawn: {withdrawn})")]
-    InalidWithdrawalAmount { owned: String, withdrawn: String },
-
-    #[error("Withdrawn amounts below min wanted amounts: got: {got}, wanted: {wanted}")]
-    WithdrawnAmontsBelowMin { got: String, wanted: String },
+    #[error("Withdrawal error: {0}")]
+    Withdrawal(#[from] WithdrawalError),
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -79,5 +46,54 @@ pub enum InstantiationError {
 
     #[error("Weights are String Decimals in the range [0, 1], got: {0}")]
     InvalidWeight(String),
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum DepositError {
+    // FIXME I wanted to ask for the inputs twice (swiss cheese model),
+    //       but it do looks quite ugly, and stuff like this error only
+    //       make the code more confusing. Remember, security comes with
+    //       consistent semantics.
+    #[error("Improper balances: expected {expected} but got {got}")]
+    ImproperSentAmounts { expected: String, got: String },
+
+    #[error("Nothing to deposit, user sent 0 tokens")]
+    ZeroTokensSent {},
+
+    #[error("Cant mint vault shares to itself ({0})")]
+    ShareholderCantBeContract(String),
+
+    #[error("Shareholder address for the deposit is not a valid address: {0}")]
+    InvalidShareholderAddress(String),
+
+    #[error("Used amounts below min wanted amounts: used: {used}, wanted: {wanted}")]
+    DepositedAmontsBelowMin { used: String, wanted: String }
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum RebalanceError {
+    #[error("You cant rebalance a vault without funds")]
+    NothingToRebalance {},
+
+    #[error("Pool with id {0} is empty, and thus has no price")]
+    PoolWithoutPrice(u64),
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum WithdrawalError {
+    #[error("Cant withdraw 0 shares")]
+    ZeroSharesWithdrawal {},
+
+    #[error("Trying to withdraw to improper address {0}")]
+    InvalidWithdrawalAddress(String),
+    
+    #[error("Cant withdraw to itself ({0})")]
+    CantWithdrawToContract(String),
+
+    #[error("Trying to withdraw more shares than owned (owned: {owned}, withdrawn: {withdrawn})")]
+    InalidWithdrawalAmount { owned: String, withdrawn: String },
+
+    #[error("Withdrawn amounts below min wanted amounts: got: {got}, wanted: {wanted}")]
+    WithdrawnAmontsBelowMin { got: String, wanted: String }
 }
 
