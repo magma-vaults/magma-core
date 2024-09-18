@@ -4,7 +4,7 @@ use cosmwasm_std::{Deps, Env, Uint128, Uint256};
 use cw20_base::state::TOKEN_INFO;
 use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::PositionByIdRequest};
 
-use crate::{do_ok, do_me, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{PositionType, VAULT_INFO, VAULT_STATE}};
+use crate::{do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{PositionType, PROTOCOL_INFO, VAULT_INFO, VAULT_STATE}};
 
 pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
     let full_range_balances = position_balances_with_fees(PositionType::FullRange, deps);
@@ -33,23 +33,56 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
         .map(|bal| bal.amount)
         .unwrap();
 
-    // Invariant: The conversion wont fail, because we got the
-    //            contract balances directly from `BankQuerier.
-    //            The additions wont overflow, because for that
-    //            the token supply would have to be above
-    //            `Uint128::MAX`, but thats not possible.
+    // Invariant: Any state is present after instantiation.
+    let protocol_fee = PROTOCOL_INFO.load(deps.storage).unwrap().protocol_fee;
+
+    // Invariant: Wont panic.
+    // Proof: Any addition of token amounts wont overflow, because
+    //        the max supply of any token is `Uint128::MAX`.
+    //        Subtraction of `protocol_unclaimed_fees` wont overflow,
+    //        because `protocol_unclaimed_fees < total_token_fees` is
+    //        invariant (`protocol_fee.0` is a valid Weight`).
+    //        `from_str` conversions wont fail, because we got
+    //        `contract_balance` directly from `BankQuerier`, so we
+    //        know they refer to valid amounts.
     do_me! { 
+        
+        let total_token0_fees = full_range_balances.bal0_fees
+            .checked_add(base_balances.bal0_fees)?
+            .checked_add(limit_balances.bal0_fees)?;
+
+        let total_token1_fees = full_range_balances.bal1_fees
+            .checked_add(base_balances.bal1_fees)?
+            .checked_add(limit_balances.bal1_fees)?;
+
+        let protocol_unclaimed_fees0 = protocol_fee.0
+            .mul_raw(total_token0_fees)
+            .atomics();
+
+        let protocol_unclaimed_fees1 = protocol_fee.0
+            .mul_raw(total_token1_fees)
+            .atomics();
+
         let bal0 = Uint128::from_str(&contract_balance0)?
             .checked_add(full_range_balances.bal0)?
             .checked_add(base_balances.bal0)?
-            .checked_add(limit_balances.bal0)?;
+            .checked_add(limit_balances.bal0)?
+            .checked_add(total_token0_fees)?
+            .checked_sub(protocol_unclaimed_fees0)?;
 
         let bal1 = Uint128::from_str(&contract_balance1)?
             .checked_add(full_range_balances.bal1)?
             .checked_add(base_balances.bal1)?
-            .checked_add(limit_balances.bal1)?;
-
-        VaultBalancesResponse { bal0, bal1 }
+            .checked_add(limit_balances.bal1)?
+            .checked_add(total_token1_fees)?
+            .checked_sub(protocol_unclaimed_fees1)?;
+        
+        VaultBalancesResponse { 
+            bal0,
+            bal1,
+            protocol_unclaimed_fees0,
+            protocol_unclaimed_fees1
+        }
     }.unwrap()
 }
 
@@ -88,6 +121,20 @@ pub fn position_balances_with_fees(
         assert!(pos.position.unwrap().position_id == id);
     }
 
+    // Invariant: Will never panic, because if the position has amounts
+    //            `amount0` and `amount1`, we know theyre valid `Uint128`s.
+    // NOTE: We subtract 1 to prevent dust error durign withdrawals, as 
+    //       position withdrawals can leave 1 atomic token behind.
+    let bal0 = Uint128::from_str(&asset0.amount)
+        .unwrap()
+        .checked_sub(Uint128::one())
+        .unwrap_or(Uint128::zero());
+
+    let bal1 = Uint128::from_str(&asset1.amount)
+        .unwrap()
+        .checked_sub(Uint128::one())
+        .unwrap_or(Uint128::zero());
+
     // Invariant: If `rewards` is present, we know its a `Vec` of valid
     //            amounts, so the conversion will never fail.
     let rewards0 = rewards
@@ -104,19 +151,21 @@ pub fn position_balances_with_fees(
         .unwrap_or(Ok(Uint128::zero()))
         .unwrap();
 
-    // Invariant: Will never panic, because if the position has amounts
-    //            `amount0` and `amount1`, we know theyre valid `Uint128`s.
-    //            Neither will the addition overflow, because balances
-    //            could only overflow if the tokens they refer had
-    //            supplies above `Uint128::MAX`, but thats not possible.
-    do_me! { 
-        let bal0 = Uint128::from_str(&asset0.amount)?.checked_add(rewards0)?;
-        let bal1 = Uint128::from_str(&asset1.amount)?.checked_add(rewards1)?;
-        PositionBalancesWithFeesResponse { bal0, bal1 }
-    }.unwrap()
+    PositionBalancesWithFeesResponse { 
+        bal0,
+        bal1,
+        bal0_fees: rewards0,
+        bal1_fees: rewards1
+    }
 }
 
-// How can I fix this ugly flag!
+// TODO: Test dust errors for this function.
+// TODO FIXME: How can I fix this ugly flag!
+// NOTE: I cant just pass a `VaultBalancesResponse` as arg, because
+//       that would allow the dev to make undesired mutations to it!
+//       But theres only one way of constructing the type: through 
+//       the `vault_balances` query, so maybe theres a nicer way of
+//       handling Msgs and MsgResponses.
 pub fn calc_shares_and_usable_amounts(
     input_amount0: Uint128,
     input_amount1: Uint128,
@@ -125,8 +174,7 @@ pub fn calc_shares_and_usable_amounts(
     env: &Env,
 ) -> CalcSharesAndUsableAmountsResponse {
     let VaultBalancesResponse {
-        bal0: total0,
-        bal1: total1,
+        bal0: total0, bal1: total1, ..
     } = vault_balances(deps, env);
 
     // Invariant: If the amounts are already in the contract, then, in

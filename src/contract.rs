@@ -1,6 +1,6 @@
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdResult, Uint128,
+    StdResult, Uint128
 };
 use cw20_base::contract::{query_balance, query_token_info};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
@@ -9,7 +9,8 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositi
 use crate::msg::
     QueryMsg
 ;
-use crate::{execute, query};
+use crate::state::{ProtocolInfo, PROTOCOL_INFO};
+use crate::{do_me, execute, query};
 use crate::{
     error::ContractError,
     msg::{ExecuteMsg, InstantiateMsg},
@@ -23,18 +24,11 @@ pub fn instantiate(
     _info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
-    // Invaraint: `VaultInfo` serialization should never fail.
-    VAULT_INFO.save(deps.storage, &vault_info).unwrap();
-
     let vault_parameters = VaultParameters::new(msg.vault_parameters)?;
-    // Invariant: `VaultParameters` serialization should never fail.
-    VAULT_PARAMETERS.save(deps.storage, &vault_parameters).unwrap();
-
     let vault_state = VaultState::default();
-    // Invariant: `VaultState` serialization should never fail.
-    VAULT_STATE.save(deps.storage, &vault_state).unwrap();
-
+    let protocol_info = ProtocolInfo::default();
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
         symbol: msg.vault_info.vault_symbol,
@@ -45,8 +39,16 @@ pub fn instantiate(
             cap: None,
         }),
     };
-    // Invariant: `TokenInfo` serialization should never fail.
-    TOKEN_INFO.save(deps.storage, &token_info).unwrap();
+
+    // Invariant: No state serializaton will panic, as we already ensured
+    //            theyre proper during development.
+    do_me! {
+        VAULT_INFO.save(deps.storage, &vault_info)?;
+        VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
+        VAULT_STATE.save(deps.storage, &vault_state)?;
+        PROTOCOL_INFO.save(deps.storage, &protocol_info)?;
+        TOKEN_INFO.save(deps.storage, &token_info)?;
+    }.unwrap();
 
     Ok(Response::new())
 }
@@ -88,7 +90,7 @@ pub fn execute(
     use ExecuteMsg::*;
     match msg {
         Deposit(deposit_msg) => Ok(execute::deposit(deposit_msg, deps, env, info)?),
-        Rebalance {} => Ok(execute::rebalance(deps.as_ref(), env)?),
+        Rebalance {} => Ok(execute::rebalance(deps, env)?),
         Withdraw(withdraw_msg) => Ok(execute::withdraw(withdraw_msg, deps, env, info)?),
     }
 }
@@ -115,10 +117,10 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, utils::price_function_inv};
+    use crate::{constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, utils::price_function_inv};
 
     use super::*;
-    use cosmwasm_std::{Coin, Decimal};
+    use cosmwasm_std::{Coin, Decimal, coin};
     use cw20::BalanceResponse;
     use osmosis_std::types::osmosis::{
         concentratedliquidity::v1beta1::{
@@ -621,5 +623,209 @@ mod test {
             &[],
             &pool_info.deployer
         ).unwrap();
+    }
+
+    #[test]
+    fn withdraw_without_rebalances() {
+        let (pool_x, pool_y) = (100_000, 200_000);
+        let pool_info = create_basic_usdc_osmo_pool(pool_x, pool_y);
+        let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into()
+        });
+
+        let (vault_x, vault_y) = (1_000, 1_500);
+        wasm.execute(
+            &vault_addr.0,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(vault_x),
+                amount1: Uint128::new(vault_y),
+                amount0_min: Uint128::new(vault_x),
+                amount1_min: Uint128::new(vault_y),
+                to: pool_info.deployer.address()
+            }),
+            &[
+                Coin::new(vault_x, USDC_DENOM),
+                Coin::new(vault_y, OSMO_DENOM)
+            ],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_before_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+
+        println!("{:?}", vault_balances_before_withdrawal);
+
+        let shares_got: BalanceResponse = wasm.query(
+            &vault_addr.0,
+            &QueryMsg::Balance { 
+                address: pool_info.deployer.address() 
+            }
+        ).unwrap();
+
+        wasm.execute(
+            &vault_addr.0, 
+            &ExecuteMsg::Withdraw(
+                WithdrawMsg {
+                    shares: shares_got.balance,
+                    amount0_min: Uint128::zero(),
+                    amount1_min: Uint128::zero(),
+                    to: pool_info.deployer.address()
+                }
+            ),
+            &[],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_after_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+        
+        println!("{:?}", vault_balances_after_withdrawal);
+    }
+
+    #[test]
+    fn withdraw_limit_without_rebalances() {
+        let (pool_x, pool_y) = (100_000, 200_000);
+        let pool_info = create_basic_usdc_osmo_pool(pool_x, pool_y);
+        let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into()
+        });
+
+        let (vault_x, vault_y) = (0, 6969);
+        wasm.execute(
+            &vault_addr.0,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(vault_x),
+                amount1: Uint128::new(vault_y),
+                amount0_min: Uint128::new(vault_x),
+                amount1_min: Uint128::new(vault_y),
+                to: pool_info.deployer.address()
+            }),
+            &[
+                coin(vault_y, OSMO_DENOM)
+            ],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_before_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+
+        println!("{:?}", vault_balances_before_withdrawal);
+
+        let shares_got: BalanceResponse = wasm.query(
+            &vault_addr.0,
+            &QueryMsg::Balance { 
+                address: pool_info.deployer.address() 
+            }
+        ).unwrap();
+
+        wasm.execute(
+            &vault_addr.0, 
+            &ExecuteMsg::Withdraw(
+                WithdrawMsg {
+                    shares: shares_got.balance,
+                    amount0_min: Uint128::zero(),
+                    amount1_min: Uint128::zero(),
+                    to: pool_info.deployer.address()
+                }
+            ),
+            &[],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_after_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+        
+        println!("{:?}", vault_balances_after_withdrawal);
+    }
+
+    #[test]
+    fn withdraw_with_min_amounts() {
+        let (pool_x, pool_y) = (100_000, 200_000);
+        let pool_info = create_basic_usdc_osmo_pool(pool_x, pool_y);
+        let (vault_addr, wasm) = inst_vault(&pool_info, VaultParametersInstantiateMsg { 
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into()
+        });
+
+        let (vault_x, vault_y) = (1_000, 1_500);
+        wasm.execute(
+            &vault_addr.0,
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(vault_x),
+                amount1: Uint128::new(vault_y),
+                amount0_min: Uint128::new(vault_x),
+                amount1_min: Uint128::new(vault_y),
+                to: pool_info.deployer.address()
+            }),
+            &[
+                coin(vault_x, USDC_DENOM),
+                coin(vault_y, OSMO_DENOM)
+            ],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_before_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+
+        let shares_got: BalanceResponse = wasm.query(
+            &vault_addr.0,
+            &QueryMsg::Balance { 
+                address: pool_info.deployer.address() 
+            }
+        ).unwrap();
+
+        let improper_withdrawal = wasm.execute(
+            &vault_addr.0, 
+            &ExecuteMsg::Withdraw(
+                WithdrawMsg {
+                    shares: shares_got.balance,
+                    amount0_min: vault_balances_before_withdrawal.bal0 + Uint128::one(),
+                    amount1_min: vault_balances_before_withdrawal.bal1 + Uint128::one(),
+                    to: pool_info.deployer.address()
+                }
+            ),
+            &[],
+            &pool_info.deployer
+        );
+        assert!(improper_withdrawal.is_err());
+
+        wasm.execute(
+            &vault_addr.0, 
+            &ExecuteMsg::Withdraw(
+                WithdrawMsg {
+                    shares: shares_got.balance,
+                    amount0_min: vault_balances_before_withdrawal.bal0,
+                    amount1_min: vault_balances_before_withdrawal.bal1,
+                    to: pool_info.deployer.address()
+                }
+            ),
+            &[],
+            &pool_info.deployer
+        ).unwrap();
+
+        let vault_balances_after_withdrawal: VaultBalancesResponse= wasm.query(
+            &vault_addr.0,
+            &QueryMsg::VaultBalances { }
+        ).unwrap();
+
+        assert!(vault_balances_after_withdrawal.bal0.is_zero());
+        assert!(vault_balances_after_withdrawal.bal1.is_zero());
+        assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
+        assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
     }
 }

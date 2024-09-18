@@ -8,7 +8,7 @@ use anyhow::Error;
 
 use readonly;
 
-use crate::constants::MAX_TICK;
+use crate::constants::{MAX_PROTOCOL_FEE, MAX_TICK};
 use crate::do_ok;
 use crate::error::InstantiationError;
 use crate::{
@@ -359,6 +359,33 @@ impl VaultState {
     }
 }
 
+#[cw_serde]
+#[readonly::make]
+pub struct ProtocolFee(pub Weight);
+impl ProtocolFee {
+    // FIXME: This doesnt work for some reason.
+    // pub static MAX = MAX_PROTOCOL_FEE;
+
+    pub fn new(value: &str) -> Option<Self> {
+        let value = Weight::new(value)?;
+        (value.0 <= *MAX_PROTOCOL_FEE).then_some(Self(value))
+    }
+}
+
+impl Default for ProtocolFee {
+    fn default() -> Self {
+        // Invariant: Wont panic, `ProtocolFee::MAX` is 0.15, 
+        Self::new("0.1").unwrap()
+    } 
+}
+
+#[cw_serde]
+#[derive(Default)]
+pub struct ProtocolInfo {
+    pub protocol_tokens0_owned: Uint128,
+    pub protocol_tokens1_owned: Uint128,
+    pub protocol_fee: ProtocolFee
+}
 
 /// VAULT_INFO Holds non-mathematical generally immutable information
 /// about the vault. Its generally immutable as in it can only be
@@ -375,3 +402,6 @@ pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters"
 /// VAULT_STATE Holds any vault state that can and will be changed
 /// with contract business logic.
 pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
+
+pub const PROTOCOL_INFO: Item<ProtocolInfo> = Item::new("protocol_info");
+

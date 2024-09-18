@@ -1,10 +1,10 @@
 use std::str::FromStr;
 
-use cosmwasm_std::{coin, coins, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event, MessageInfo, Response, SubMsg, Uint128};
+use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, VaultParameters, Weight, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, VaultParameters, Weight, PROTOCOL_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
 
 // TODO More clarifying errors. TODO Events to query positions (deposits).
 pub fn deposit(
@@ -68,7 +68,6 @@ pub fn deposit(
 
     // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
 
-
     // Invariant: We already verified the inputed amounts are not zero, 
     //            thus the resulting shares can never be zero.
     assert!(!shares.is_zero());
@@ -93,20 +92,18 @@ pub fn deposit(
     //            about actual inputed amounts.
     assert!(amount0_used <= amount0 && amount1_used <= amount1);
 
-    // TODO: Test and filter zero amounts if needed.
     // Invariant: Wont panic because of the invariant above.
     Ok(res.add_message(BankMsg::Send {
         to_address: info.sender.to_string(),
         amount: vec![
             coin(amount0.checked_sub(amount0_used).unwrap().into(), denom0),
-            coin(amount1.checked_sub(amount0_used).unwrap().into(), denom1)
-        ]
+            coin(amount1.checked_sub(amount1_used).unwrap().into(), denom1)
+        ].into_iter().filter(|x| !x.amount.is_zero()).collect()
     }))
 }
 
-
 // TODO Finish cleanup.
-pub fn rebalance(deps: Deps, env: Env) -> Result<Response, RebalanceError> {
+pub fn rebalance(deps: DepsMut, env: Env) -> Result<Response, RebalanceError> {
     use RebalanceError::*;
     // TODO Can rebalance? Check `VaultRebalancer` and other params,
     // like `minTickMove` or `period`.
@@ -123,17 +120,30 @@ pub fn rebalance(deps: Deps, env: Env) -> Result<Response, RebalanceError> {
 
     let mut events: Vec<Event> = vec![];
 
-    let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps, &env);
+    let VaultBalancesResponse { 
+        bal0,
+        bal1,
+        protocol_unclaimed_fees0,
+        protocol_unclaimed_fees1 
+    } = query::vault_balances(deps.as_ref(), &env);
+
+    // Invariant: Any addition of tokens wont overflow, because for that the token
+    //            max supply would have to be above `Uint128::MAX`, but thats impossible.
+    PROTOCOL_INFO.update(deps.storage, |mut info| -> StdResult<_> { 
+        info.protocol_tokens0_owned = info.protocol_tokens0_owned
+            .checked_add(protocol_unclaimed_fees0)?;
+        info.protocol_tokens1_owned = info.protocol_tokens1_owned
+            .checked_add(protocol_unclaimed_fees1)?;
+        Ok(info)
+    }).unwrap();
+
+    let deps = deps.as_ref();
+
     events.push(
         Event::new("vault_balances_snapshot")
             .add_attribute("balance0", bal0)
             .add_attribute("balance1", bal1),
     );
-
-    // NOTE: We remove 3 tokens from each balance to prevent dust errors. Ie,
-    //       position withdrawals always leave 1 token behind.
-    let bal0 = bal0.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
-    let bal1 = bal1.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
 
     if bal0.is_zero() && bal1.is_zero() {
         return Err(NothingToRebalance {});
@@ -549,12 +559,22 @@ pub fn withdraw(
     // Invariant: TokenInfo will always be present after instantiation.
     let total_shares_supply = query_token_info(deps.as_ref()).unwrap().total_supply;
 
-    let VaultBalancesResponse { bal0, bal1 } = query::vault_balances(deps.as_ref(), &env);
+    let VaultBalancesResponse { 
+        bal0,
+        bal1,
+        protocol_unclaimed_fees0,
+        protocol_unclaimed_fees1 
+    } = query::vault_balances(deps.as_ref(), &env);
 
-    // NOTE: We remove 3 tokens from each balance to prevent dust errors. Ie,
-    //       position withdrawals always leave 1 token behind.
-    let bal0 = bal0.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
-    let bal1 = bal1.checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
+    // Invariant: Any addition of tokens wont overflow, because for that the token
+    //            max supply would have to be above `Uint128::MAX`, but thats impossible.
+    PROTOCOL_INFO.update(deps.storage, |mut info| -> StdResult<_> { 
+        info.protocol_tokens0_owned = info.protocol_tokens0_owned
+            .checked_add(protocol_unclaimed_fees0)?;
+        info.protocol_tokens1_owned = info.protocol_tokens1_owned
+            .checked_add(protocol_unclaimed_fees1)?;
+        Ok(info)
+    }).unwrap();
 
     // Invariant: We know that `info.sender` is a proper address, thus even if it didnt 
     //            any shares, the query would return Uint128::zero().
@@ -627,17 +647,15 @@ pub fn withdraw(
         }
     })?;
 
-    // TODO Test!! With amount vecs of any size! 1, 0 and 2!
     Ok(shares_burn_response
         .add_message(rewards_claim_msg)
         .add_messages(liquidity_removal_msgs)
         .add_message(BankMsg::Send {
-            to_address: withdrawal_address.clone().into(),
-            amount: coins(expected_withdrawn_amount0.into(), denom0),
-        })
-        .add_message(BankMsg::Send {
             to_address: withdrawal_address.into(),
-            amount: coins(expected_withdrawn_amount1.into(), denom1),
+            amount: vec![
+                coin(expected_withdrawn_amount0.into(), denom0),
+                coin(expected_withdrawn_amount1.into(), denom1),
+            ].into_iter().filter(|c| !c.amount.is_zero()).collect()
         })
     )
 }

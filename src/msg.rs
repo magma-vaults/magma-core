@@ -63,6 +63,8 @@ pub enum ExecuteMsg {
 #[cw_serde]
 #[derive(QueryResponses)]
 pub enum QueryMsg {
+    /// All value held by the vault, including balances in the contract, 
+    /// balances in positions, and uncollected fees.
     #[returns(VaultBalancesResponse)]
     VaultBalances {},
     #[returns(PositionBalancesWithFeesResponse)]
@@ -79,15 +81,21 @@ pub enum QueryMsg {
 
 #[cw_serde]
 pub struct VaultBalancesResponse {
+    /// All of token0 held by the vault, but without counting the protocol fees.
     pub bal0: Uint128,
-    pub bal1: Uint128
+    /// All of token1 held by the vault, but without counting the protocol fees.
+    pub bal1: Uint128,
+    pub protocol_unclaimed_fees0: Uint128,
+    pub protocol_unclaimed_fees1: Uint128
 }
 
 #[cw_serde]
 #[derive(Default)]
 pub struct PositionBalancesWithFeesResponse {
     pub bal0: Uint128,
-    pub bal1: Uint128
+    pub bal1: Uint128,
+    pub bal0_fees: Uint128,
+    pub bal1_fees: Uint128,
 }
 
 #[cw_serde]
