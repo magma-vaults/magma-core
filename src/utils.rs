@@ -26,6 +26,27 @@ macro_rules! do_me {
     }
 }
 
+#[macro_export]
+macro_rules! assert_approx_eq {
+    ($a:expr, $b:expr, $tol:expr) => {
+        let d = if $a > $b {
+            $a - $b
+        } else { 
+            $b - $a 
+        };
+
+        if d > $tol {
+            panic!(
+                "assertion failed: `abs(left - right) <= tolerance` \
+                 (left: `{:?}`, right: `{:?}`, tolerance: `{:?}`)",
+                $a, $b, $tol
+            );
+            
+        }
+    };
+}
+
+
 pub fn raw<T: From<Uint128>>(d: &Decimal) -> T {
     d.atomics().into()
 }

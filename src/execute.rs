@@ -204,13 +204,14 @@ pub fn rebalance(deps: DepsMut, env: Env) -> Result<Response, RebalanceError> {
         assert!(balances_price <= price * Decimal::from_str("1.01").unwrap());
     }
 
+    // TODO Decouple $x_0, y_0$ computation, as its not trivial.
     let (full_range_balance0, full_range_balance1) = {
         // TODO Document the math (see [[MagmaLiquidity]]).
         // FIXME All those unwraps could fail under extreme conditions. Lift to Uint256?
         // TODO PROVE SECURITY!
         let sqrt_k = base_factor.0.sqrt();
 
-        let numerator = full_range_weight.mul_dec(&sqrt_k.sqrt());
+        let numerator = full_range_weight.mul_dec(&sqrt_k);
         // Invariant: Wont overflow because we lifter to 256 bits.
         let numerator = Decimal256::from(numerator)
             .checked_mul(balanced_balance0.into())
