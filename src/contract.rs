@@ -72,9 +72,13 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             &env,
         )),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
-        VaultPositions {} => {
+        VaultState {} => {
             // Invariant: Any state is present after instantiation.
             to_json_binary(&VAULT_STATE.load(deps.storage).unwrap())
+        },
+        VaultInfo {} => {
+            // Invariant: Any state is present after instantiation.
+            to_json_binary(&VAULT_INFO.load(deps.storage).unwrap())
         },
         TokenInfo {} => to_json_binary(&query_token_info(deps)?)
     }
@@ -90,7 +94,7 @@ pub fn execute(
     use ExecuteMsg::*;
     match msg {
         Deposit(deposit_msg) => Ok(execute::deposit(deposit_msg, deps, env, info)?),
-        Rebalance {} => Ok(execute::rebalance(deps, env)?),
+        Rebalance {} => Ok(execute::rebalance(deps, env, info)?),
         Withdraw(withdraw_msg) => Ok(execute::withdraw(withdraw_msg, deps, env, info)?),
     }
 }
@@ -115,16 +119,15 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 
 #[cfg(test)]
 mod test {
-    use std::{borrow::Borrow, rc::Rc, str::FromStr};
+    use std::str::FromStr;
 
     use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::PositionType, utils::price_function_inv};
 
     use super::*;
-    use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, BankQuery, Coin, Decimal};
-    use cw20::BalanceResponse;
+    use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
     use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{
         concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord, PositionByIdRequest
+            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord
         }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}}
     ;
     use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
@@ -337,21 +340,21 @@ mod test {
                 unimplemented!()
             } else if amount0 == 0 {
                 Ok(self.wasm.execute(
-                    &self.vault_addr.to_string(),
+                    self.vault_addr.as_ref(),
                     execute_msg,
                     &[coin1],
                     from
                 )?)
             } else if amount1 == 0 {
                 Ok(self.wasm.execute(
-                    &self.vault_addr.to_string(),
+                    self.vault_addr.as_ref(),
                     execute_msg,
                     &[coin0],
                     from
                 )?)
             } else {
                 Ok(self.wasm.execute(
-                    &self.vault_addr.to_string(),
+                    self.vault_addr.as_ref(),
                     execute_msg,
                     &[coin0, coin1],
                     from
@@ -364,7 +367,7 @@ mod test {
             from: &SigningAccount
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
-                &self.vault_addr.to_string(), &ExecuteMsg::Rebalance {}, &[], from
+                self.vault_addr.as_ref(), &ExecuteMsg::Rebalance {}, &[], from
             )?)
         }
 
@@ -374,12 +377,12 @@ mod test {
             from: &SigningAccount
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
-                &self.vault_addr.to_string(),
+                self.vault_addr.as_ref(),
                 &ExecuteMsg::Withdraw(WithdrawMsg{
                     shares,
                     amount0_min: Uint128::zero(),
                     amount1_min: Uint128::zero(),
-                    to: from.address().into()
+                    to: from.address()
                 }),
                 &[],
                 from
@@ -388,21 +391,21 @@ mod test {
 
         fn vault_balances_query(&self) -> VaultBalancesResponse {
             self.wasm.query(
-                &self.vault_addr.to_string(),
+                self.vault_addr.as_ref(),
                 &QueryMsg::VaultBalances { }
             ).unwrap()
         }
 
         fn position_balances_query(&self, position_type: PositionType) -> PositionBalancesWithFeesResponse {
             self.wasm.query(
-                &self.vault_addr.to_string(),
+                self.vault_addr.as_ref(),
                 &QueryMsg::PositionBalancesWithFees { position_type },
             ).unwrap()
         }
 
         fn shares_query(&self, address: &str) -> Uint128 {
             let res: cw20::BalanceResponse = self.wasm.query(
-                &self.vault_addr.to_string(),
+                self.vault_addr.as_ref(),
                 &QueryMsg::Balance { address: address.into() }
             ).unwrap();
             res.balance
@@ -410,30 +413,10 @@ mod test {
 
         fn vault_state_query(&self) -> VaultState {
             self.wasm.query(
-                &self.vault_addr.to_string(),
-                &QueryMsg::VaultPositions {}
+                self.vault_addr.as_ref(),
+                &QueryMsg::VaultState {}
             ).unwrap()
         }
-
-        /* TODO
-        let withdraw_vault_addr = vault_addr.clone();
-        let withdraw_wasm = Rc::clone(&wasm);
-        let withdraw = move || {
-            withdraw_wasm.execute(
-                &rebalance_vault_addr.to_string(), 
-                &ExecuteMsg::Withdraw(
-                    WithdrawMsg {
-                        shares: shares_got.balance,
-                        amount0_min: vault_balances_before_withdrawal.bal0,
-                        amount1_min: vault_balances_before_withdrawal.bal1,
-                        to: pool_info.deployer.address()
-                    }
-                ),
-                &[],
-                &pool_info.deployer
-            ).unwrap();
-        };
-        */
     }
 
 
@@ -481,7 +464,7 @@ mod test {
         let bals = vault_mockup.vault_balances_query();
         assert_eq!(bals.bal0.u128(), 1_000);
         assert_eq!(bals.bal1.u128(), 1_500);
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         let full_range_position = vault_mockup.position_balances_query(PositionType::FullRange);
 
@@ -505,7 +488,7 @@ mod test {
         });
 
         vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
 
     #[test]
@@ -520,7 +503,7 @@ mod test {
         });
         
         vault_mockup.deposit(pool_balance0/2, pool_balance1/2, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         assert!(vault_mockup.vault_state_query().limit_position_id.is_none());
         assert!(vault_mockup.vault_state_query().full_range_position_id.is_some());
         assert!(vault_mockup.vault_state_query().base_position_id.is_some());
@@ -536,7 +519,7 @@ mod test {
         });
 
         vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Dual case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
@@ -547,7 +530,7 @@ mod test {
         });
 
         vault_mockup.deposit(0, 42, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Combined case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
@@ -558,7 +541,7 @@ mod test {
         });
 
         vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         assert!(vault_mockup.vault_state_query().limit_position_id.is_some());
         assert!(vault_mockup.vault_state_query().full_range_position_id.is_none());
         assert!(vault_mockup.vault_state_query().base_position_id.is_none());
@@ -587,12 +570,12 @@ mod test {
 
         let (vault_x, vault_y) = (1_000, 1_000);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         let usdc_got = pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, vault_y/10).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, usdc_got.into()).unwrap();
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
 
     #[test]
@@ -607,10 +590,11 @@ mod test {
         let (vault_x, vault_y) = (1_000, 1_500);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
-        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 50_000).unwrap();
         vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
     }
+
 
     #[test]
     fn withdraw_without_rebalances() {
@@ -673,7 +657,7 @@ mod test {
         let (vault_x, vault_y) = (1_000, 1_500);
 
         let improper_deposit = vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(),
+            vault_mockup.vault_addr.as_ref(),
             &ExecuteMsg::Deposit(DepositMsg {
                 amount0: Uint128::new(vault_x),
                 amount1: Uint128::new(vault_y),
@@ -690,7 +674,7 @@ mod test {
         assert!(improper_deposit.is_err());
 
         vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(),
+            vault_mockup.vault_addr.as_ref(),
             &ExecuteMsg::Deposit(DepositMsg {
                 amount0: Uint128::new(vault_x),
                 amount1: Uint128::new(vault_y),
@@ -710,7 +694,7 @@ mod test {
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
 
         let improper_withdrawal = vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(), 
+            vault_mockup.vault_addr.as_ref(), 
             &ExecuteMsg::Withdraw(
                 WithdrawMsg {
                     shares: shares_got,
@@ -725,7 +709,7 @@ mod test {
         assert!(improper_withdrawal.is_err());
 
         vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(), 
+            vault_mockup.vault_addr.as_ref(), 
             &ExecuteMsg::Withdraw(
                 WithdrawMsg {
                     shares: shares_got,

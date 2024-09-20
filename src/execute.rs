@@ -1,10 +1,10 @@
-use std::str::FromStr;
+use std::{ops::RangeBounds, str::FromStr};
 
 use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, VaultParameters, Weight, PROTOCOL_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, PROTOCOL_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
 
 // TODO More clarifying errors. TODO Events to query positions (deposits).
 pub fn deposit(
@@ -103,14 +103,85 @@ pub fn deposit(
 }
 
 // TODO Finish cleanup.
-pub fn rebalance(deps: DepsMut, env: Env) -> Result<Response, RebalanceError> {
+pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, RebalanceError> {
     use RebalanceError::*;
-    // TODO Can rebalance? Check `VaultRebalancer` and other params,
-    // like `minTickMove` or `period`.
 
     // Invariant: Any state will be initialized after instantation.
     let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+    let vault_state = VAULT_STATE.load(deps.storage).unwrap();
+
     let pool_id = vault_info.pool_id.clone();
+    let price = pool_id.price(&deps.querier);
+    
+    // TODO Use other params. 
+    // TODO Refactor.
+    match vault_info.rebalancer {
+        VaultRebalancer::Admin { } => {
+            // Invariant: The rebalancer cant be `Admin` if admin is not present.
+            let admin = vault_info.admin.clone().unwrap();
+            if admin != info.sender {
+                return Err(UnauthorhizedNonAdminAccount { 
+                    admin: admin.into(), got: info.sender.into() 
+                })
+            }
+        },
+        VaultRebalancer::Delegate { ref rebalancer } => {
+            if rebalancer != info.sender {
+                return Err(UnauthorizedDelegateAccount { 
+                    delegate: rebalancer.into(), got: info.sender.into() 
+                })
+            }
+        },
+        VaultRebalancer::Anyone { 
+            ref price_factor_before_rebalance,
+            time_before_rabalance 
+        } => {
+            if let Some(StateSnapshot {
+                last_price,
+                last_timestamp
+            }) = vault_state.last_price_and_timestamp {
+                let current_time = env.block.time;
+                assert!(current_time > last_timestamp);
+
+                let threshold = last_timestamp.plus_seconds(time_before_rabalance.seconds());
+                if threshold > current_time {
+                    let time_left = current_time.minus_seconds(threshold.seconds()).seconds();
+                    return Err(NotEnoughTimePassed { time_left })
+                }
+
+                // TODO: Prove security.
+                let upper_bound = last_price
+                    .checked_mul(price_factor_before_rebalance.0)
+                    .unwrap();
+
+                // Invariant: Wont overflow as price factors are always greater or equal to 1
+                let lower_bound = last_price
+                    .checked_div(price_factor_before_rebalance.0)
+                    .unwrap();
+
+                if (lower_bound..=upper_bound).contains(&price) {
+                    return Err(PriceHasntMovedEnough { 
+                        price: price.to_string(),
+                        factor: price_factor_before_rebalance.0.to_string() 
+                    })
+                }
+
+            }
+            
+        },
+    };
+
+
+    // NOTE: We always update `LastPriceAndTimestamp` even if theyre not used, for
+    //       semantical simplicity of the variable.
+    // Invariant: Wont panic, all types are proper.
+    VAULT_STATE.save(deps.storage, &VaultState { 
+        last_price_and_timestamp: Some(StateSnapshot {
+            last_price: price,
+            last_timestamp: env.block.time
+        }),
+        ..vault_state 
+    }).unwrap();
 
     let VaultParameters {
         base_factor,
@@ -149,7 +220,6 @@ pub fn rebalance(deps: DepsMut, env: Env) -> Result<Response, RebalanceError> {
         return Err(NothingToRebalance {});
     }
 
-    let price = pool_id.price(&deps.querier);
     events.push(
         Event::new("vault_pool_price_snapshot").add_attribute("price", price.to_string()),
     );

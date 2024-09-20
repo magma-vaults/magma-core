@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 use cw20::{BalanceResponse, TokenInfoResponse};
-use crate::state::{PositionType, VaultState};
+use crate::state::{PositionType, VaultInfo, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -25,9 +25,16 @@ pub enum VaultRebalancerInstantiateMsg {
     Admin {},
     /// Any delegated address decided by the admin can trigger rebalances.
     Delegate { rebalancer: String },
-    /// Anyone can trigger rebalances, its the only option if there isnt a
-    /// vault manager.
-    Anyone {}
+    /// Anyone can trigger rebalances, its the only option if the vault
+    /// doesnt has an admin. In that case, the specified parameters will
+    /// determine if a rebalance is possible.
+    Anyone {
+        /// Decimal value, greater or equal than 1. Anyone will only be able to
+        /// rebalance if the price has moved this factor since the last rebalance.
+        price_factor_before_rebalance: String,
+        /// Anyone can only rebalance if this time has passed since the last rebalace.
+        seconds_before_rabalance: u64
+    }
 }
 
 #[cw_serde]
@@ -74,9 +81,11 @@ pub enum QueryMsg {
     #[returns(BalanceResponse)]
     Balance { address: String },
     #[returns(VaultState)]
-    VaultPositions {},
+    VaultState {},
     #[returns(TokenInfoResponse)]
-    TokenInfo {}
+    TokenInfo {},
+    #[returns(VaultInfo)]
+    VaultInfo {}
 }
 
 #[cw_serde]

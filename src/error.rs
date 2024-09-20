@@ -72,6 +72,18 @@ pub enum DepositError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum RebalanceError {
+    #[error("Only admin ({admin}) can rebalance, tried to rebalance from {got}")]
+    UnauthorhizedNonAdminAccount { admin: String, got: String },
+
+    #[error("Only the delegate address {delegate} can rebalance, tried to do so from {got}")]
+    UnauthorizedDelegateAccount { delegate: String, got: String },
+
+    #[error("Cant rebalance, price hasnt moved enough (price: {price}; movement_factor: {factor})")]
+    PriceHasntMovedEnough { price: String, factor: String },
+
+    #[error("Not enough time passed since last rebalance, can rebalance in {time_left}")]
+    NotEnoughTimePassed { time_left: u64 },
+
     #[error("You cant rebalance a vault without funds")]
     NothingToRebalance {},
 

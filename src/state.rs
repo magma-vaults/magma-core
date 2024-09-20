@@ -1,5 +1,5 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
@@ -229,7 +229,7 @@ impl VaultInfo {
             )
         } else {
             match rebalancer {
-                VaultRebalancer::Anyone {} => Ok(None),
+                VaultRebalancer::Anyone { .. } => Ok(None),
                 _ => Err(ContradictoryConfig {
                     reason: "If admin is none, the rebalancer can only be anyone".into(),
                 }),
@@ -301,15 +301,15 @@ impl VaultInfo {
     }
 }
 
+/// See [`VaultRebalancerInstantiateMsg`].
 #[cw_serde]
 pub enum VaultRebalancer {
-    /// Only the contract admin can trigger rebalances.
     Admin {},
-    /// Any delegated address decided by the admin can trigger rebalances.
     Delegate { rebalancer: Addr },
-    /// Anyone can trigger rebalances, its the only option if the vault
-    /// doesnt has an admin.
-    Anyone {},
+    Anyone { 
+        price_factor_before_rebalance: PriceFactor,
+        time_before_rabalance: Timestamp
+    },
 }
 
 impl VaultRebalancer {
@@ -318,16 +318,24 @@ impl VaultRebalancer {
         deps: Deps,
     ) -> Result<Self, InstantiationError> {
         use VaultRebalancerInstantiateMsg::*;
+        use InstantiationError::*;
+
         match rebalancer {
             Delegate { rebalancer: x } => {
                 let rebalancer = deps
                     .api
                     .addr_validate(&x)
-                    .map_err(|_| InstantiationError::InvalidDelegateAddress(x))?;
+                    .map_err(|_| InvalidDelegateAddress(x))?;
                 Ok(Self::Delegate { rebalancer })
             }
             Admin {} => Ok(Self::Admin {}),
-            Anyone {} => Ok(Self::Anyone {}),
+            Anyone { seconds_before_rabalance, price_factor_before_rebalance } => {
+                Ok(Self::Anyone {
+                    price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
+                        .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
+                    time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance)
+                })
+            }
         }
     }
 }
@@ -337,16 +345,29 @@ pub enum PositionType { FullRange, Base, Limit }
 
 type MaybePositionId = Option<u64>;
 
+// TODO: The bind can be stricter, as the second field can only change
+//       in one direction.
+#[cw_serde]
+pub struct StateSnapshot {
+    pub last_price: Decimal, 
+    pub last_timestamp: Timestamp
+}
+
 #[cw_serde]
 #[derive(Default)]
 pub struct VaultState {
-    // Position Ids are optional because:
-    // 1. Positions are only created on rebalances.
-    // 2. If any of the vault positions is null, then those should
-    //    be `None`, see `VaultParameters`.
+    /// Position Ids are optional because:
+    /// 1. Positions are only created on rebalances.
+    /// 2. If any of the vault positions is null, then those should
+    ///    be `None`, see [`VaultParameters`].
     pub full_range_position_id: MaybePositionId,
     pub base_position_id: MaybePositionId,
-    pub limit_position_id: MaybePositionId
+    pub limit_position_id: MaybePositionId,
+
+    /// last price and last timestamp since the last rebalance. Optional as it
+    /// requires a first rebalance to happen to be set. After that, both will
+    /// always be set.
+    pub last_price_and_timestamp: Option<StateSnapshot>
 }
 
 impl VaultState {
