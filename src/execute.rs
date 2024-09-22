@@ -4,7 +4,7 @@ use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{constants::PROTOCOL, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
 
 // TODO More clarifying errors. TODO Events to query positions (deposits).
 pub fn deposit(
@@ -748,3 +748,58 @@ pub fn withdraw(
         })
     )
 }
+
+pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Response, ProtocolOperationError> {
+    // Invariant: Any state is always present after instantiation.
+    let mut fees = FEES_INFO.load(deps.storage).unwrap();
+    let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
+    
+    if *PROTOCOL != info.sender {
+        return Err(ProtocolOperationError::UnauthorizedProtocolAccount {})
+    }
+
+    let tx = BankMsg::Send { 
+        to_address: PROTOCOL.to_string(),
+        amount: vec![
+            coin(fees.protocol_tokens0_owned.into(), denom0),
+            coin(fees.protocol_tokens1_owned.into(), denom1)
+        ] 
+    };
+
+    fees.protocol_tokens0_owned = Uint128::zero();
+    fees.protocol_tokens1_owned = Uint128::zero();
+
+    // Invariant: Will serialize as all types are proper.
+    FEES_INFO.save(deps.storage, &fees).unwrap();
+    Ok(Response::new().add_message(tx))
+}
+
+pub fn withdraw_admin_fees(deps: DepsMut, info: MessageInfo) -> Result<Response, AdminOperationError> {
+    // Invariant: Any state is always present after instantiation.
+    let mut fees = FEES_INFO.load(deps.storage).unwrap();
+    let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+    let (denom0, denom1) = vault_info.denoms(&deps.querier);
+
+    let admin = vault_info.admin
+        .ok_or(AdminOperationError::AdminFeesClaimForNonExistantAdmin {})?;
+
+    if info.sender != admin {
+        return Err(AdminOperationError::UnauthorizedAdminAccount {})
+    }
+
+    let tx = BankMsg::Send { 
+        to_address:  admin.into(),
+        amount: vec![
+            coin(fees.admin_tokens0_owned.into(), denom0),
+            coin(fees.admin_tokens1_owned.into(), denom1)
+        ] 
+    };
+
+    fees.admin_tokens0_owned = Uint128::zero();
+    fees.admin_tokens1_owned = Uint128::zero();
+
+    // Invariant: Will serialize as all types are proper.
+    FEES_INFO.save(deps.storage, &fees).unwrap();
+    Ok(Response::new().add_message(tx))
+}
+

@@ -412,14 +412,18 @@ pub struct FeesInfo {
 }
 
 impl FeesInfo {
-    pub fn new(admin_fee: String) -> Result<FeesInfo, InstantiationError> {
+    pub fn new(admin_fee: String, vault_info: &VaultInfo) -> Result<FeesInfo, InstantiationError> {
         let admin_fee = ProtocolFee::new(&admin_fee)
             .ok_or(InstantiationError::InvalidAdminFee {
                 max: ProtocolFee::max().to_string(),
                 got: admin_fee 
             })?;
 
-        Ok(FeesInfo { admin_fee, ..FeesInfo::default() })
+        if !admin_fee.0.is_zero() && vault_info.admin.is_none() {
+            Err(InstantiationError::AdminFeeWithoutAdmin {})
+        } else {
+            Ok(FeesInfo { admin_fee, ..FeesInfo::default() })
+        }
     }
 }
 

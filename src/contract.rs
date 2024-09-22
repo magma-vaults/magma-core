@@ -28,7 +28,7 @@ pub fn instantiate(
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
-    let protocol_info = FeesInfo::new(msg.vault_parameters.admin_fee)?;
+    let protocol_info = FeesInfo::new(msg.vault_parameters.admin_fee, &vault_info)?;
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
         symbol: msg.vault_info.vault_symbol,
@@ -80,7 +80,11 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             // Invariant: Any state is present after instantiation.
             to_json_binary(&VAULT_INFO.load(deps.storage).unwrap())
         },
-        TokenInfo {} => to_json_binary(&query_token_info(deps)?)
+        FeesInfo {} => {
+            // Invariant: Any state is present after instantiation.
+            to_json_binary(&FEES_INFO.load(deps.storage).unwrap())
+        },
+        TokenInfo {} => to_json_binary(&query_token_info(deps)?),
     }
 }
 
@@ -96,6 +100,8 @@ pub fn execute(
         Deposit(deposit_msg) => Ok(execute::deposit(deposit_msg, deps, env, info)?),
         Rebalance {} => Ok(execute::rebalance(deps, env, info)?),
         Withdraw(withdraw_msg) => Ok(execute::withdraw(withdraw_msg, deps, env, info)?),
+        WithdrawProtocolFees {} => Ok(execute::withdraw_protocol_fees(deps, info)?),
+        WithdrawAdminFees {} => Ok(execute::withdraw_admin_fees(deps, info)?),
     }
 }
 
@@ -148,7 +154,7 @@ mod test {
     }
 
     impl PoolMockup {
-        fn new(x_bal: u128, y_bal: u128) -> Self {
+        fn new(usdc_in: u128, osmo_in: u128) -> Self {
             let app = OsmosisTestApp::new();
             
             let init_coins = &[
@@ -193,11 +199,11 @@ mod test {
                         lower_tick: MIN_TICK.into(),
                         upper_tick: MAX_TICK.into(),
                         tokens_provided: vec![
-                            Coin::new(x_bal, USDC_DENOM).into(),
-                            Coin::new(y_bal, OSMO_DENOM).into(),
+                            Coin::new(usdc_in, USDC_DENOM).into(),
+                            Coin::new(osmo_in, OSMO_DENOM).into(),
                         ],
-                        token_min_amount0: x_bal.to_string(),
-                        token_min_amount1: y_bal.to_string(),
+                        token_min_amount0: usdc_in.to_string(),
+                        token_min_amount1: osmo_in.to_string(),
                     },
                     &deployer,
                 )
@@ -207,7 +213,7 @@ mod test {
             // NOTE: Could fail if we test multiple positions.
             assert_eq!(position_res.position_id, 1);
 
-            let _price = Decimal::new(y_bal.into()) / Decimal::new(x_bal.into());
+            let _price = Decimal::new(osmo_in.into()) / Decimal::new(usdc_in.into());
 
             Self {
                 pool_id, app, deployer, user1, user2, _price
@@ -400,6 +406,18 @@ mod test {
             )?)
         }
 
+        fn admin_withdraw(
+            &self,
+            from: &SigningAccount
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>>{
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref()   ,
+                &ExecuteMsg::WithdrawAdminFees {},
+                &[],
+                from
+            )?)
+        }
+
         fn vault_balances_query(&self) -> VaultBalancesResponse {
             self.wasm.query(
                 self.vault_addr.as_ref(),
@@ -426,6 +444,13 @@ mod test {
             self.wasm.query(
                 self.vault_addr.as_ref(),
                 &QueryMsg::VaultState {}
+            ).unwrap()
+        }
+
+        fn vault_fees_query(&self) -> FeesInfo {
+            self.wasm.query(
+                self.vault_addr.as_ref(),
+                &QueryMsg::FeesInfo {}
             ).unwrap()
         }
     }
@@ -756,5 +781,74 @@ mod test {
         assert!(vault_balances_after_withdrawal.bal1.is_zero());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
+    }
+
+    #[test]
+    fn fees_withdrawals_on_rebalance() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        vault_mockup.deposit(100_000, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 20_000).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        let fees = vault_mockup.vault_fees_query();
+        assert!(fees.admin_tokens0_owned.is_zero());
+        assert!(!fees.admin_tokens1_owned.is_zero());
+        assert!(fees.protocol_tokens0_owned.is_zero());
+        assert!(!fees.protocol_tokens1_owned.is_zero());
+
+        assert!(vault_mockup.admin_withdraw(&pool_mockup.user1).is_err());
+        assert!(vault_mockup.admin_withdraw(&pool_mockup.user2).is_err());
+        vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+
+        let fees = vault_mockup.vault_fees_query();
+        assert!(fees.admin_tokens0_owned.is_zero());
+        assert!(fees.admin_tokens1_owned.is_zero());
+        assert!(fees.protocol_tokens0_owned.is_zero());
+        assert!(!fees.protocol_tokens1_owned.is_zero());
+
+        // TODO
+        // vault_mockup.protocol_withdraw().unwrap();
+    }
+
+    #[test]
+    fn fees_withdrawals_on_withdrawal() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        vault_mockup.deposit(100_000, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 20_000).unwrap();
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+
+        let fees = vault_mockup.vault_fees_query();
+        assert!(fees.admin_tokens0_owned.is_zero());
+        assert!(!fees.admin_tokens1_owned.is_zero());
+        assert!(fees.protocol_tokens0_owned.is_zero());
+        assert!(!fees.protocol_tokens1_owned.is_zero());
+
+        assert!(vault_mockup.admin_withdraw(&pool_mockup.user1).is_err());
+        assert!(vault_mockup.admin_withdraw(&pool_mockup.user2).is_err());
+        let x = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+        println!("{:?}", x);
+        // TODO Check if the transaction indeed sends some tokens back.
+
+        let fees = vault_mockup.vault_fees_query();
+        assert!(fees.admin_tokens0_owned.is_zero());
+        assert!(fees.admin_tokens1_owned.is_zero());
+        assert!(fees.protocol_tokens0_owned.is_zero());
+        assert!(!fees.protocol_tokens1_owned.is_zero());
+
+        // TODO
+        // vault_mockup.protocol_withdraw().unwrap();
+    }
+
+    #[test]
+    fn cant_manipulate_contract_balances_in_unintended_ways() {
+        // TODO
+        assert!(true)
     }
 }

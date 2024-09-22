@@ -35,19 +35,25 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
         .unwrap();
 
     // Invariant: Any state is present after instantiation.
-    let fees_info = FEES_INFO.load(deps.storage).unwrap();
+    let fees = FEES_INFO.load(deps.storage).unwrap();
 
     // Invariant: Wont panic.
-    // Proof: Any addition of token amounts wont overflow, because
-    //        the max supply of any token is `Uint128::MAX`.
-    //        Subtraction of `unclaimed_fees` wont overflow, because
-    //        `unclaimed_fees < total_token_fees` is invariant 
-    //        (`protocol_fee.0 + admin_fee.0` is a valid `Weight`).
-    //        `from_str` conversions wont fail, because we got
-    //        `contract_balance` directly from `BankQuerier`, so we
-    //        know they refer to valid amounts.
+    // Proof: If the contract has unclaimed fees, we know its balance will at
+    //        least be those fees, so the subtractions wont overflow. Any
+    //        addition of token amounts wont overflow, because for that the
+    //        token supply of any token would have to be above `Uint128::MAX`.
+    //        Products wont overflow, as we know the fees are valid weights.
+    //        `from_str` conversions wont fail, because we got `contract_balance`
+    //        directly from `BankQuerier`, so we know they refer to valid amounts.
     do_me! { 
-        
+        let contract_balance0 = Uint128::from_str(&contract_balance0)?
+            .checked_sub(fees.protocol_tokens0_owned)?
+            .checked_sub(fees.admin_tokens0_owned)?;
+
+        let contract_balance1 = Uint128::from_str(&contract_balance1)?
+            .checked_sub(fees.protocol_tokens1_owned)?
+            .checked_sub(fees.admin_tokens1_owned)?;
+
         let total_token0_fees = full_range_balances.bal0_fees
             .checked_add(base_balances.bal0_fees)?
             .checked_add(limit_balances.bal0_fees)?;
@@ -56,23 +62,23 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
             .checked_add(base_balances.bal1_fees)?
             .checked_add(limit_balances.bal1_fees)?;
 
-        let protocol_unclaimed_fees0 = fees_info.protocol_fee.0
+        let protocol_unclaimed_fees0 = fees.protocol_fee.0
             .mul_raw(total_token0_fees)
             .atomics();
 
-        let protocol_unclaimed_fees1 = fees_info.protocol_fee.0
+        let protocol_unclaimed_fees1 = fees.protocol_fee.0
             .mul_raw(total_token1_fees)
             .atomics();
 
-        let admin_unclaimed_fees0 = fees_info.admin_fee.0
+        let admin_unclaimed_fees0 = fees.admin_fee.0
             .mul_raw(total_token0_fees)
             .atomics();
 
-        let admin_unclaimed_fees1 = fees_info.admin_fee.0
+        let admin_unclaimed_fees1 = fees.admin_fee.0
             .mul_raw(total_token1_fees)
             .atomics();
 
-        let bal0 = Uint128::from_str(&contract_balance0)?
+        let bal0 = contract_balance0
             .checked_add(full_range_balances.bal0)?
             .checked_add(base_balances.bal0)?
             .checked_add(limit_balances.bal0)?
@@ -80,7 +86,7 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
             .checked_sub(protocol_unclaimed_fees0)?
             .checked_sub(admin_unclaimed_fees0)?;
 
-        let bal1 = Uint128::from_str(&contract_balance1)?
+        let bal1 = contract_balance1
             .checked_add(full_range_balances.bal1)?
             .checked_add(base_balances.bal1)?
             .checked_add(limit_balances.bal1)?

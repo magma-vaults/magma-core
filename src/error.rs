@@ -1,19 +1,7 @@
-use cosmwasm_std::StdError;
-use cw_utils::PaymentError;
 use thiserror::Error;
  
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
-    // TODO Dont use those, theyre too generic
-    #[error("{0}")]
-    Std(#[from] StdError),
-
-    #[error("cw20 error: {0}")]
-    Cw20(#[from] cw20_base::ContractError),
-
-    #[error("Payment error: {0}")]
-    Payment(#[from] PaymentError),
-
     #[error("Instantiation error: {0}")]
     Instantiation(#[from] InstantiationError),
 
@@ -25,6 +13,12 @@ pub enum ContractError {
 
     #[error("Withdrawal error: {0}")]
     Withdrawal(#[from] WithdrawalError),
+
+    #[error("Admin operation error: {0}")]
+    AdminOperation(#[from] AdminOperationError),
+
+    #[error("Protocol operation error: {0}")]
+    ProtocolOperation(#[from] ProtocolOperationError)
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -40,6 +34,9 @@ pub enum InstantiationError {
 
     #[error("Invalid vault admin fee: max: {max}; got: {got}")]
     InvalidAdminFee { max: String, got: String },
+
+    #[error("The vault admin cant have any fee if the vault doesnt have any admin")]
+    AdminFeeWithoutAdmin { },
 
     #[error("Contradiction: {reason}")]
     ContradictoryConfig { reason: String },
@@ -112,3 +109,17 @@ pub enum WithdrawalError {
     WithdrawnAmontsBelowMin { got: String, wanted: String }
 }
 
+#[derive(Error, Debug, PartialEq)]
+pub enum ProtocolOperationError {
+    #[error("Cant claim protocol fees from non protocol account")]
+    UnauthorizedProtocolAccount { },
+}
+
+#[derive(Error, Debug, PartialEq)]
+pub enum AdminOperationError {
+    #[error("Cant claim admin fees from non admin account")]
+    UnauthorizedAdminAccount { },
+
+    #[error("Cant claim admin fees if vault has no admin")]
+    AdminFeesClaimForNonExistantAdmin { },
+}

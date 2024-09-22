@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 use cw20::{BalanceResponse, TokenInfoResponse};
-use crate::state::{PositionType, VaultInfo, VaultState};
+use crate::state::{FeesInfo, PositionType, VaultInfo, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -65,7 +65,9 @@ pub struct WithdrawMsg {
 pub enum ExecuteMsg {
     Deposit(DepositMsg),
     Rebalance {},
-    Withdraw(WithdrawMsg)
+    Withdraw(WithdrawMsg),
+    WithdrawProtocolFees { },
+    WithdrawAdminFees { }
 }
 
 #[cw_serde]
@@ -86,7 +88,9 @@ pub enum QueryMsg {
     #[returns(TokenInfoResponse)]
     TokenInfo {},
     #[returns(VaultInfo)]
-    VaultInfo {}
+    VaultInfo {},
+    #[returns(FeesInfo)]
+    FeesInfo {}
 }
 
 #[cw_serde]
