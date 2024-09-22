@@ -432,6 +432,13 @@ mod test {
             ).unwrap()
         }
 
+        fn token_info_query(&self) -> TokenInfo {
+            self.wasm.query(
+                self.vault_addr.as_ref(),
+                &QueryMsg::TokenInfo {  }
+            ).unwrap()
+        }
+
         fn shares_query(&self, address: &str) -> Uint128 {
             let res: cw20::BalanceResponse = self.wasm.query(
                 self.vault_addr.as_ref(),
@@ -846,9 +853,48 @@ mod test {
         // vault_mockup.protocol_withdraw().unwrap();
     }
 
+    #[test] 
+    fn cant_operate_with_no_funds() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
+        assert!(vault_mockup.withdraw(Decimal::one().atomics(), &pool_mockup.deployer).is_err());
+        assert!(vault_mockup.withdraw(Uint128::zero(), &pool_mockup.deployer).is_err());
+    }
+
+    // FIXME: 1. Track unmanipulated contract balances from the state.
+    //        2. Err any executions with unexpected tokens.
     #[test]
     fn cant_manipulate_contract_balances_in_unintended_ways() {
-        // TODO
-        assert!(true)
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        let should_err = vault_mockup.wasm.execute(
+            vault_mockup.vault_addr.as_ref(),
+            &ExecuteMsg::Deposit(DepositMsg {
+                amount0: Uint128::new(50_000), amount1: Uint128::new(50_000),
+                amount0_min: Uint128::zero(), amount1_min: Uint128::zero(),
+                to: pool_mockup.user1.address()
+            }),
+            &[coin(50_000, USDC_DENOM), coin(50_001, OSMO_DENOM)],
+            &pool_mockup.user1
+        );
+
+        assert!(should_err.is_err());
+        vault_mockup.deposit(50_000, 50_000, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+
+        let should_err = vault_mockup.wasm.execute(
+            vault_mockup.vault_addr.as_ref(),
+            &ExecuteMsg::Withdraw(WithdrawMsg { 
+                shares, 
+                amount0_min: Uint128::zero(),
+                amount1_min: Uint128::zero(),
+                to: pool_mockup.user1.address()
+            }),
+            &[coin(1000, USDC_DENOM)],
+            &pool_mockup.user1
+        );
+        // FIXME: Undefined behaviour!
+        assert!(should_err.is_err());
     }
 }

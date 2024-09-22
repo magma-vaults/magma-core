@@ -211,8 +211,6 @@ pub fn calc_shares_and_usable_amounts(
     let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
 
     if total_supply.is_zero() {
-        assert!(total0.is_zero() && total1.is_zero());
-
         CalcSharesAndUsableAmountsResponse {
             shares: cmp::max(input_amount0, input_amount1),
             usable_amount0: input_amount0,
