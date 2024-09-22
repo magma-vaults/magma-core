@@ -130,6 +130,25 @@ impl PriceFactor {
 }
 
 #[cw_serde]
+#[readonly::make]
+pub struct ProtocolFee(pub Weight);
+impl ProtocolFee {
+    pub fn max() -> Decimal { *MAX_PROTOCOL_FEE }
+
+    pub fn new(value: &str) -> Option<Self> {
+        let value = Weight::new(value)?;
+        (value.0 <= Self::max()).then_some(Self(value))
+    }
+}
+
+impl Default for ProtocolFee {
+    fn default() -> Self {
+        // Invariant: Wont panic, `ProtocolFee::MAX` is 0.1, 
+        Self::new("0.05").unwrap()
+    } 
+}
+
+#[cw_serde]
 pub struct VaultParameters {
     // Price factor for the base order. Thus, if the current price is `p`,
     // then the base position will have range `[p/base_factor, p*base_factor]`.
@@ -239,7 +258,7 @@ impl VaultInfo {
         Ok(VaultInfo {
             pool_id,
             rebalancer,
-            admin,
+            admin
         })
     }
 
@@ -380,32 +399,28 @@ impl VaultState {
     }
 }
 
-#[cw_serde]
-#[readonly::make]
-pub struct ProtocolFee(pub Weight);
-impl ProtocolFee {
-    // FIXME: This doesnt work for some reason.
-    // pub static MAX = MAX_PROTOCOL_FEE;
-
-    pub fn new(value: &str) -> Option<Self> {
-        let value = Weight::new(value)?;
-        (value.0 <= *MAX_PROTOCOL_FEE).then_some(Self(value))
-    }
-}
-
-impl Default for ProtocolFee {
-    fn default() -> Self {
-        // Invariant: Wont panic, `ProtocolFee::MAX` is 0.15, 
-        Self::new("0.1").unwrap()
-    } 
-}
 
 #[cw_serde]
 #[derive(Default)]
-pub struct ProtocolInfo {
+pub struct FeesInfo {
+    pub protocol_fee: ProtocolFee,
     pub protocol_tokens0_owned: Uint128,
     pub protocol_tokens1_owned: Uint128,
-    pub protocol_fee: ProtocolFee
+    pub admin_fee: ProtocolFee,
+    pub admin_tokens0_owned: Uint128,
+    pub admin_tokens1_owned: Uint128,
+}
+
+impl FeesInfo {
+    pub fn new(admin_fee: String) -> Result<FeesInfo, InstantiationError> {
+        let admin_fee = ProtocolFee::new(&admin_fee)
+            .ok_or(InstantiationError::InvalidAdminFee {
+                max: ProtocolFee::max().to_string(),
+                got: admin_fee 
+            })?;
+
+        Ok(FeesInfo { admin_fee, ..FeesInfo::default() })
+    }
 }
 
 /// VAULT_INFO Holds non-mathematical generally immutable information
@@ -424,5 +439,5 @@ pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters"
 /// with contract business logic.
 pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
 
-pub const PROTOCOL_INFO: Item<ProtocolInfo> = Item::new("protocol_info");
+pub const FEES_INFO: Item<FeesInfo> = Item::new("protocol_info");
 

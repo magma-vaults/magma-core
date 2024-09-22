@@ -5,9 +5,10 @@ use crate::state::{PositionType, VaultInfo, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
-    pub base_factor: String, // Decimal value, greater or equal to 1.
-    pub limit_factor: String, // Decimal value, greater or equal to 1.
-    pub full_range_weight: String // Decimal value, in range [0, 1].
+    pub base_factor: String, // See [`PriceFactor`].
+    pub limit_factor: String, // See [`PriceFactor`].
+    pub full_range_weight: String, // See [`PriceFactor`].
+    pub admin_fee: String, // See [`ProtocolFee`].
 }
 
 #[cw_serde]
@@ -16,7 +17,7 @@ pub struct VaultInfoInstantiateMsg {
     pub vault_name: String,
     pub vault_symbol: String,
     pub admin: Option<String>,
-    pub rebalancer: VaultRebalancerInstantiateMsg
+    pub rebalancer: VaultRebalancerInstantiateMsg,
 }
 
 #[cw_serde]
@@ -90,12 +91,14 @@ pub enum QueryMsg {
 
 #[cw_serde]
 pub struct VaultBalancesResponse {
-    /// All of token0 held by the vault, but without counting the protocol fees.
+    /// All of token0 held by the vault, but without counting protocol/admin fees.
     pub bal0: Uint128,
-    /// All of token1 held by the vault, but without counting the protocol fees.
+    /// All of token1 held by the vault, but without counting protocol/admin fees.
     pub bal1: Uint128,
     pub protocol_unclaimed_fees0: Uint128,
-    pub protocol_unclaimed_fees1: Uint128
+    pub protocol_unclaimed_fees1: Uint128,
+    pub admin_unclaimed_fees0: Uint128,
+    pub admin_unclaimed_fees1: Uint128,
 }
 
 #[cw_serde]

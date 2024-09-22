@@ -38,6 +38,9 @@ pub enum InstantiationError {
     #[error("Invalid vault admin address: {0}")]
     InvalidAdminAddress(String),
 
+    #[error("Invalid vault admin fee: max: {max}; got: {got}")]
+    InvalidAdminFee { max: String, got: String },
+
     #[error("Contradiction: {reason}")]
     ContradictoryConfig { reason: String },
 

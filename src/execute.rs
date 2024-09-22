@@ -4,7 +4,7 @@ use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, PROTOCOL_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{error::{DepositError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
 
 // TODO More clarifying errors. TODO Events to query positions (deposits).
 pub fn deposit(
@@ -192,7 +192,9 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         bal0,
         bal1,
         protocol_unclaimed_fees0,
-        protocol_unclaimed_fees1 
+        protocol_unclaimed_fees1,
+        admin_unclaimed_fees0,
+        admin_unclaimed_fees1
     } = query::vault_balances(deps, &env);
 
     events.push(
@@ -491,11 +493,15 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
 
     // Invariant: Any addition of tokens wont overflow, because for that the token
     //            max supply would have to be above `Uint128::MAX`, but thats impossible.
-    PROTOCOL_INFO.update(deps_mut.storage, |mut info| -> StdResult<_> { 
+    FEES_INFO.update(deps_mut.storage, |mut info| -> StdResult<_> { 
         info.protocol_tokens0_owned = info.protocol_tokens0_owned
             .checked_add(protocol_unclaimed_fees0)?;
         info.protocol_tokens1_owned = info.protocol_tokens1_owned
             .checked_add(protocol_unclaimed_fees1)?;
+        info.admin_tokens0_owned = info.admin_tokens0_owned
+            .checked_add(admin_unclaimed_fees0)?;
+        info.admin_tokens1_owned = info.admin_tokens1_owned
+            .checked_add(admin_unclaimed_fees1)?;
         Ok(info)
     }).unwrap();
 
@@ -633,16 +639,22 @@ pub fn withdraw(
         bal0,
         bal1,
         protocol_unclaimed_fees0,
-        protocol_unclaimed_fees1 
+        protocol_unclaimed_fees1,
+        admin_unclaimed_fees0,
+        admin_unclaimed_fees1
     } = query::vault_balances(deps.as_ref(), &env);
 
     // Invariant: Any addition of tokens wont overflow, because for that the token
     //            max supply would have to be above `Uint128::MAX`, but thats impossible.
-    PROTOCOL_INFO.update(deps.storage, |mut info| -> StdResult<_> { 
+    FEES_INFO.update(deps.storage, |mut info| -> StdResult<_> { 
         info.protocol_tokens0_owned = info.protocol_tokens0_owned
             .checked_add(protocol_unclaimed_fees0)?;
         info.protocol_tokens1_owned = info.protocol_tokens1_owned
             .checked_add(protocol_unclaimed_fees1)?;
+        info.admin_tokens0_owned = info.admin_tokens0_owned
+            .checked_add(admin_unclaimed_fees0)?;
+        info.admin_tokens1_owned = info.admin_tokens1_owned
+            .checked_add(admin_unclaimed_fees1)?;
         Ok(info)
     }).unwrap();
 

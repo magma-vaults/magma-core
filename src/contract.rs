@@ -9,7 +9,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositi
 use crate::msg::
     QueryMsg
 ;
-use crate::state::{ProtocolInfo, PROTOCOL_INFO};
+use crate::state::{FeesInfo, FEES_INFO};
 use crate::{do_me, execute, query};
 use crate::{
     error::ContractError,
@@ -26,9 +26,9 @@ pub fn instantiate(
 ) -> Result<Response, ContractError> {
 
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
-    let vault_parameters = VaultParameters::new(msg.vault_parameters)?;
+    let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
-    let protocol_info = ProtocolInfo::default();
+    let protocol_info = FeesInfo::new(msg.vault_parameters.admin_fee)?;
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
         symbol: msg.vault_info.vault_symbol,
@@ -46,7 +46,7 @@ pub fn instantiate(
         VAULT_INFO.save(deps.storage, &vault_info)?;
         VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
         VAULT_STATE.save(deps.storage, &vault_state)?;
-        PROTOCOL_INFO.save(deps.storage, &protocol_info)?;
+        FEES_INFO.save(deps.storage, &protocol_info)?;
         TOKEN_INFO.save(deps.storage, &token_info)?;
     }.unwrap();
 
@@ -124,7 +124,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::PositionType, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee}, utils::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
@@ -283,14 +283,22 @@ mod test {
             .code_id
     }
 
+    fn vault_params(base: &str, limit: &str, full: &str) -> VaultParametersInstantiateMsg {
+        VaultParametersInstantiateMsg {
+            full_range_weight: full.into(),
+            base_factor: base.into(),
+            limit_factor: limit.into(),
+            admin_fee: ProtocolFee::default().0.0.to_string()
+        }
+    }
+
     struct VaultMockup<'a> {
         vault_addr: Addr,
-        pool_mockup: &'a PoolMockup,
         wasm: Wasm<'a, OsmosisTestApp>
     }
 
     impl VaultMockup<'_> {
-        fn new<'a>(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> VaultMockup {
+        fn new(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> VaultMockup {
             let wasm = Wasm::new(&pool_info.app);
             let code_id = store_vaults_code(&wasm, &pool_info.deployer);
             let api = mock_dependencies().api;
@@ -304,7 +312,7 @@ mod test {
                             vault_name: "My USDC/OSMO vault".into(),
                             vault_symbol: "USDCOSMOV".into(),
                             admin: Some(pool_info.deployer.address()),
-                            rebalancer: VaultRebalancerInstantiateMsg::Admin {},
+                            rebalancer: VaultRebalancerInstantiateMsg::Admin {}
                         },
                         vault_parameters: params,
                     },
@@ -319,7 +327,7 @@ mod test {
 
             let vault_addr = api.addr_validate(&vault_addr).unwrap();
 
-            VaultMockup { vault_addr, pool_mockup: pool_info, wasm }
+            VaultMockup { vault_addr, wasm }
         }
 
         fn deposit(
@@ -457,11 +465,7 @@ mod test {
     #[test]
     fn normal_rebalances() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
         let bals = vault_mockup.vault_balances_query();
@@ -484,11 +488,7 @@ mod test {
     #[test]
     fn normal_rebalance_dual() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -499,11 +499,7 @@ mod test {
         let pool_balance0 = 100_000;
         let pool_balance1 = 200_000;
         let pool_mockup = PoolMockup::new(pool_balance0, pool_balance1);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         
         vault_mockup.deposit(pool_balance0/2, pool_balance1/2, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -515,33 +511,21 @@ mod test {
     #[test]
     fn only_limit_rebalance() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Dual case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         vault_mockup.deposit(0, 42, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Combined case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -565,11 +549,7 @@ mod test {
     #[test]
     fn full_limit_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         
         vault_mockup.deposit(50_000, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -585,11 +565,7 @@ mod test {
     #[test]
     fn full_balanced_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         
         vault_mockup.deposit(10_000, 20_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -605,11 +581,7 @@ mod test {
     #[test]
     fn full_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         
         vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -638,11 +610,7 @@ mod test {
     #[test]
     fn rebalance_after_price_change() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (1_000, 1_000);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
@@ -657,11 +625,7 @@ mod test {
     #[test]
     fn out_of_range_vault_positions_test() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (1_000, 1_500);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
@@ -676,11 +640,7 @@ mod test {
     fn withdraw_without_rebalances() {
         let (pool_x, pool_y) = (100_000, 200_000);
         let pool_mockup = PoolMockup::new(pool_x, pool_y);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (1_000, 1_500);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
@@ -701,11 +661,7 @@ mod test {
     fn withdraw_limit_without_rebalances() {
         let (pool_x, pool_y) = (100_000, 200_000);
         let pool_mockup = PoolMockup::new(pool_x, pool_y);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (0, 6969);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
@@ -724,11 +680,7 @@ mod test {
     fn withdraw_with_min_amounts() {
         let (pool_x, pool_y) = (100_000, 200_000);
         let pool_mockup = PoolMockup::new(pool_x, pool_y);
-        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-            base_factor: "2".into(),
-            limit_factor: "1.45".into(),
-            full_range_weight: "0.55".into(),
-        });
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (1_000, 1_500);
 
