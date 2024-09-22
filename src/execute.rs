@@ -1,4 +1,4 @@
-use std::{ops::RangeBounds, str::FromStr};
+use std::str::FromStr;
 
 use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
@@ -103,16 +103,18 @@ pub fn deposit(
 }
 
 // TODO Finish cleanup.
-pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, RebalanceError> {
+pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Response, RebalanceError> {
     use RebalanceError::*;
+
+    let deps = deps_mut.as_ref();
 
     // Invariant: Any state will be initialized after instantation.
     let vault_info = VAULT_INFO.load(deps.storage).unwrap();
-    let vault_state = VAULT_STATE.load(deps.storage).unwrap();
+    let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
 
     let pool_id = vault_info.pool_id.clone();
     let price = pool_id.price(&deps.querier);
-    
+
     // TODO Use other params. 
     // TODO Refactor.
     match vault_info.rebalancer {
@@ -149,10 +151,9 @@ pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response,
                     return Err(NotEnoughTimePassed { time_left })
                 }
 
-                // TODO: Prove security.
                 let upper_bound = last_price
                     .checked_mul(price_factor_before_rebalance.0)
-                    .unwrap();
+                    .unwrap_or(Decimal::MAX);
 
                 // Invariant: Wont overflow as price factors are always greater or equal to 1
                 let lower_bound = last_price
@@ -174,14 +175,10 @@ pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response,
 
     // NOTE: We always update `LastPriceAndTimestamp` even if theyre not used, for
     //       semantical simplicity of the variable.
-    // Invariant: Wont panic, all types are proper.
-    VAULT_STATE.save(deps.storage, &VaultState { 
-        last_price_and_timestamp: Some(StateSnapshot {
-            last_price: price,
-            last_timestamp: env.block.time
-        }),
-        ..vault_state 
-    }).unwrap();
+    vault_state.last_price_and_timestamp = Some(StateSnapshot {
+        last_price: price,
+        last_timestamp: env.block.time
+    });
 
     let VaultParameters {
         base_factor,
@@ -196,19 +193,7 @@ pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response,
         bal1,
         protocol_unclaimed_fees0,
         protocol_unclaimed_fees1 
-    } = query::vault_balances(deps.as_ref(), &env);
-
-    // Invariant: Any addition of tokens wont overflow, because for that the token
-    //            max supply would have to be above `Uint128::MAX`, but thats impossible.
-    PROTOCOL_INFO.update(deps.storage, |mut info| -> StdResult<_> { 
-        info.protocol_tokens0_owned = info.protocol_tokens0_owned
-            .checked_add(protocol_unclaimed_fees0)?;
-        info.protocol_tokens1_owned = info.protocol_tokens1_owned
-            .checked_add(protocol_unclaimed_fees1)?;
-        Ok(info)
-    }).unwrap();
-
-    let deps = deps.as_ref();
+    } = query::vault_balances(deps, &env);
 
     events.push(
         Event::new("vault_balances_snapshot")
@@ -393,7 +378,6 @@ pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response,
     if !base_factor.is_one() && !base_range_balance0.is_zero() {
         // Invariant: `base_factor > 1`, thus wont panic.
         let lower_price = price.checked_div(base_factor.0).unwrap();
-
         let upper_price = price.checked_mul(base_factor.0).unwrap_or(Decimal::MAX);
 
         let lower_tick = price_function_inv(&lower_price);
@@ -499,7 +483,22 @@ pub fn rebalance(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response,
         remove_liquidity_msg(PositionType::Limit, deps, &env, &Weight::max()),
     ].into_iter().flatten().collect();
 
-    // TODO Add callback for protocol fees and manager fees.
+    // Invariant: Wont panic as all types are proper.
+    VAULT_STATE.save(deps_mut.storage, &VaultState { 
+        last_price_and_timestamp: vault_state.last_price_and_timestamp,
+        ..VaultState::default()
+    }).unwrap();
+
+    // Invariant: Any addition of tokens wont overflow, because for that the token
+    //            max supply would have to be above `Uint128::MAX`, but thats impossible.
+    PROTOCOL_INFO.update(deps_mut.storage, |mut info| -> StdResult<_> { 
+        info.protocol_tokens0_owned = info.protocol_tokens0_owned
+            .checked_add(protocol_unclaimed_fees0)?;
+        info.protocol_tokens1_owned = info.protocol_tokens1_owned
+            .checked_add(protocol_unclaimed_fees1)?;
+        Ok(info)
+    }).unwrap();
+
     let position_ids = liquidity_removal_msgs
         .iter()
         .map(|msg| msg.position_id)
@@ -697,6 +696,13 @@ pub fn withdraw(
     .into_iter()
     .flatten()
     .collect();
+
+    if shares_proportion.is_max() {
+        VAULT_STATE.update(deps.storage, |x| -> StdResult<_> { Ok(VaultState {
+            last_price_and_timestamp: x.last_price_and_timestamp,
+            ..VaultState::default()
+        })}).unwrap();
+    }
 
     let position_ids = liquidity_removal_msgs
         .iter()

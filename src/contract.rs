@@ -99,10 +99,12 @@ pub fn execute(
     }
 }
 
-// TODO: Prove all unwraps security.
+// TODO: Use const IDs.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
+    // Invariant: We only use position creation submessages.
     let new_position: MsgCreatePositionResponse = msg.result.try_into().unwrap();
+    // Invariant: Any state will always be present after instantiation.
     let mut vault_state = VAULT_STATE.load(deps.storage).unwrap();
 
     match msg.id {
@@ -112,6 +114,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
         _ => unreachable!(),
     };
 
+    // Invariant: Wont panic as all types are proper.
     VAULT_STATE.save(deps.storage, &vault_state).unwrap();
 
     Ok(Response::new())
@@ -557,6 +560,79 @@ mod test {
         // assert!(vault_mockup.vault_state_query().limit_position_id.is_some());
         // assert!(vault_mockup.vault_state_query().full_range_position_id.is_none());
         // assert!(vault_mockup.vault_state_query().base_position_id.is_none());
+    }
+
+    #[test]
+    fn full_limit_liquidation() {
+        let pool_mockup = PoolMockup::new(100_000, 200_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into(),
+        });
+        
+        vault_mockup.deposit(50_000, 0, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+
+        vault_mockup.deposit(50_000, 0, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+    }
+
+    #[test]
+    fn full_balanced_liquidation() {
+        let pool_mockup = PoolMockup::new(100_000, 200_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into(),
+        });
+        
+        vault_mockup.deposit(10_000, 20_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+
+        vault_mockup.deposit(10_000, 20_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+    }
+
+    #[test]
+    fn full_liquidation() {
+        let pool_mockup = PoolMockup::new(100_000, 200_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
+            base_factor: "2".into(),
+            limit_factor: "1.45".into(),
+            full_range_weight: "0.55".into(),
+        });
+        
+        vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+
+        vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+    }
+
+    #[test]
+    fn no_limit_position_on_rebalance() {
+        panic!("TODO: Calc expression to get amount variations for the balances to get in proportion");
+        // let pool_mockup = PoolMockup::new(100_000, 200_000);
+        // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
+        //     base_factor: "2".into(),
+        //     limit_factor: "1.45".into(),
+        //     full_range_weight: "0.55".into(),
+        // });
+        // 
+        // vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
     }
 
     #[test]
