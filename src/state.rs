@@ -427,6 +427,13 @@ impl FeesInfo {
     }
 }
 
+#[cw_serde]
+#[derive(Default)]
+pub struct FundsInfo {
+    pub available_balance0: Uint128,
+    pub available_balance1: Uint128
+}
+
 /// VAULT_INFO Holds non-mathematical generally immutable information
 /// about the vault. Its generally immutable as in it can only be
 /// changed by the vault admin, but its state cant be changed with
@@ -443,5 +450,9 @@ pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters"
 /// with contract business logic.
 pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
 
-pub const FEES_INFO: Item<FeesInfo> = Item::new("protocol_info");
+pub const FEES_INFO: Item<FeesInfo> = Item::new("fees_info");
+
+/// FUNDS_INFO Refers to the known funds available to the contract,
+/// without counting protocol/admin fees.
+pub const FUNDS_INFO: Item<FundsInfo> = Item::new("funds_info");
 

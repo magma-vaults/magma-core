@@ -1,59 +1,36 @@
 use std::{cmp, str::FromStr};
 
-use cosmwasm_std::{Deps, Env, Uint128, Uint256};
+use cosmwasm_std::{Deps, Uint128, Uint256};
 use cw20_base::state::TOKEN_INFO;
-use osmosis_std::types::{cosmos::bank::v1beta1::BankQuerier, osmosis::concentratedliquidity::v1beta1::PositionByIdRequest};
+use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::PositionByIdRequest;
 
-use crate::{do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{PositionType, FEES_INFO, VAULT_INFO, VAULT_STATE}};
+use crate::{do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE}};
 
-// TODO: Test if the contract balance could break because of protocol/admin fees!
-pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
+/// Partition available balances to the vault in 3 sets:
+/// - Balances available for business logic, e.g., for creating new positions.
+/// - Idle protocol fees, not yet claimed nor commited to the state.
+/// - Idle vault admin fees, not yet claimed nor commited to the state.
+///
+/// For this, query the fees and balances in all current vault positions and 
+/// funds tracked by [`FUNDS_INFO`] and [`FEES_INFO`].
+pub fn vault_balances(deps: Deps) -> VaultBalancesResponse {
     let full_range_balances = position_balances_with_fees(PositionType::FullRange, deps);
     let base_balances = position_balances_with_fees(PositionType::Base, deps);
     let limit_balances = position_balances_with_fees(PositionType::Limit, deps);
 
-    // Invariant: `VAULT_INFO` will always be present after instantiation.
-    let (denom0, denom1) = VAULT_INFO
-        .load(deps.storage)
-        .unwrap()
-        .denoms(&deps.querier);
+    // Invariant: Any state will always be present after instantiation.
+    let FundsInfo { available_balance0, available_balance1 } = FUNDS_INFO
+        .load(deps.storage).unwrap();
 
-    let contract_addr = env.contract.address.to_string();
-
-    // Invariant: Wont panic becuase we verify the pool and
-    //            denoms are proper during instantiation.
-    let contract_balance0 = BankQuerier::new(&deps.querier)
-        .balance(contract_addr.clone(), denom0.clone()).ok()
-        .and_then(|x| x.balance)
-        .map(|bal| bal.amount)
-        .unwrap();
-
-    let contract_balance1 = BankQuerier::new(&deps.querier)
-        .balance(contract_addr, denom1.clone()).ok()
-        .and_then(|x| x.balance)
-        .map(|bal| bal.amount)
-        .unwrap();
-
-    // Invariant: Any state is present after instantiation.
     let fees = FEES_INFO.load(deps.storage).unwrap();
 
     // Invariant: Wont panic.
     // Proof: If the contract has unclaimed fees, we know its balance will at
-    //        least be those fees, so the subtractions wont overflow. Any
+    //        least be those fees, so the subtractions wont underflow. Any
     //        addition of token amounts wont overflow, because for that the
     //        token supply of any token would have to be above `Uint128::MAX`.
     //        Products wont overflow, as we know the fees are valid weights.
-    //        `from_str` conversions wont fail, because we got `contract_balance`
-    //        directly from `BankQuerier`, so we know they refer to valid amounts.
     do_me! { 
-        let contract_balance0 = Uint128::from_str(&contract_balance0)?
-            .checked_sub(fees.protocol_tokens0_owned)?
-            .checked_sub(fees.admin_tokens0_owned)?;
-
-        let contract_balance1 = Uint128::from_str(&contract_balance1)?
-            .checked_sub(fees.protocol_tokens1_owned)?
-            .checked_sub(fees.admin_tokens1_owned)?;
-
         let total_token0_fees = full_range_balances.bal0_fees
             .checked_add(base_balances.bal0_fees)?
             .checked_add(limit_balances.bal0_fees)?;
@@ -78,7 +55,7 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
             .mul_raw(total_token1_fees)
             .atomics();
 
-        let bal0 = contract_balance0
+        let bal0 = available_balance0
             .checked_add(full_range_balances.bal0)?
             .checked_add(base_balances.bal0)?
             .checked_add(limit_balances.bal0)?
@@ -86,7 +63,7 @@ pub fn vault_balances(deps: Deps, env: &Env) -> VaultBalancesResponse {
             .checked_sub(protocol_unclaimed_fees0)?
             .checked_sub(admin_unclaimed_fees0)?;
 
-        let bal1 = contract_balance1
+        let bal1 = available_balance1
             .checked_add(full_range_balances.bal1)?
             .checked_add(base_balances.bal1)?
             .checked_add(limit_balances.bal1)?
@@ -178,34 +155,19 @@ pub fn position_balances_with_fees(
     }
 }
 
-// TODO: Test dust errors for this function.
-// TODO FIXME: How can I fix this ugly flag!
-// NOTE: I cant just pass a `VaultBalancesResponse` as arg, because
-//       that would allow the dev to make undesired mutations to it!
-//       But theres only one way of constructing the type: through 
-//       the `vault_balances` query, so maybe theres a nicer way of
-//       handling Msgs and MsgResponses.
+/// # Arguments
+///
+/// * `input_amount0` - Amount of token0 for which we want to calculate shares for, 
+/// not yet in the contract state ([`FUNDS_INFO`]).
+///
+/// * `input_amount1` - Amount of token1 for which we want to calculate shares for, 
+/// not yet in the contract state ([`FUNDS_INFO`]).
 pub fn calc_shares_and_usable_amounts(
     input_amount0: Uint128,
     input_amount1: Uint128,
-    amounts_already_in_contract: bool,
-    deps: Deps,
-    env: &Env,
+    deps: Deps
 ) -> CalcSharesAndUsableAmountsResponse {
-    let VaultBalancesResponse {
-        bal0: total0, bal1: total1, ..
-    } = vault_balances(deps, env);
-
-    // Invariant: If the amounts are already in the contract, then, in
-    //            the worst case, the subtraction will be 0.
-    let (total0, total1) = if amounts_already_in_contract {
-        (
-            total0.checked_sub(input_amount0).unwrap(),
-            total1.checked_sub(input_amount1).unwrap(),
-        )
-    } else {
-        (total0, total1)
-    };
+    let VaultBalancesResponse { bal0: total0, bal1: total1, .. } = vault_balances(deps);
 
     // Invariant: `TOKEN_INFO` always present after instantiation.
     let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;

@@ -9,7 +9,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositi
 use crate::msg::
     QueryMsg
 ;
-use crate::state::{FeesInfo, FEES_INFO};
+use crate::state::{FeesInfo, FundsInfo, FEES_INFO, FUNDS_INFO};
 use crate::{do_me, execute, query};
 use crate::{
     error::ContractError,
@@ -21,14 +21,19 @@ use crate::{
 pub fn instantiate(
     deps: DepsMut,
     env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+
+    if !info.funds.is_empty() {
+        return Err(ContractError::NonPayable("instantiate".into()))
+    }
 
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
     let protocol_info = FeesInfo::new(msg.vault_parameters.admin_fee, &vault_info)?;
+    let funds_info = FundsInfo::default();
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
         symbol: msg.vault_info.vault_symbol,
@@ -47,6 +52,7 @@ pub fn instantiate(
         VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
         VAULT_STATE.save(deps.storage, &vault_state)?;
         FEES_INFO.save(deps.storage, &protocol_info)?;
+        FUNDS_INFO.save(deps.storage, &funds_info)?;
         TOKEN_INFO.save(deps.storage, &token_info)?;
     }.unwrap();
 
@@ -57,7 +63,7 @@ pub fn instantiate(
 pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use QueryMsg::*;
     match msg {
-        VaultBalances {} => to_json_binary(&query::vault_balances(deps, &env)),
+        VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
         PositionBalancesWithFees { position_type } => to_json_binary(
             &query::position_balances_with_fees(position_type, deps),
         ),
@@ -67,9 +73,7 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
         } => to_json_binary(&query::calc_shares_and_usable_amounts(
             for_amount0,
             for_amount1,
-            false,
-            deps,
-            &env,
+            deps
         )),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
         VaultState {} => {
@@ -96,6 +100,11 @@ pub fn execute(
     msg: ExecuteMsg,
 ) -> Result<Response, ContractError> {
     use ExecuteMsg::*;
+
+    if !matches!(msg, Deposit(_)) && !info.funds.is_empty() {
+        return Err(ContractError::NonPayable(format!("{:?}", msg)))
+    }
+
     match msg {
         Deposit(deposit_msg) => Ok(execute::deposit(deposit_msg, deps, env, info)?),
         Rebalance {} => Ok(execute::rebalance(deps, env, info)?),
@@ -862,8 +871,6 @@ mod test {
         assert!(vault_mockup.withdraw(Uint128::zero(), &pool_mockup.deployer).is_err());
     }
 
-    // FIXME: 1. Track unmanipulated contract balances from the state.
-    //        2. Err any executions with unexpected tokens.
     #[test]
     fn cant_manipulate_contract_balances_in_unintended_ways() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
@@ -894,7 +901,6 @@ mod test {
             &[coin(1000, USDC_DENOM)],
             &pool_mockup.user1
         );
-        // FIXME: Undefined behaviour!
         assert!(should_err.is_err());
     }
 }

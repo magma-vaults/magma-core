@@ -2,6 +2,9 @@ use thiserror::Error;
  
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
+    #[error("Entry point {0} is not payable")]
+    NonPayable(String),
+
     #[error("Instantiation error: {0}")]
     Instantiation(#[from] InstantiationError),
 

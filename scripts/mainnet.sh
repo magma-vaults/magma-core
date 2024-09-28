@@ -1,3 +1,3 @@
 #!/bin/sh
-osmosisd config chain-id osmosis-1
-osmosisd config node https://rpc.osmosis.zone:443
+osmosisd config set client chain-id osmosis-1
+osmosisd config set client node https://rpc.osmosis.zone:443

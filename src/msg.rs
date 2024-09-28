@@ -95,9 +95,9 @@ pub enum QueryMsg {
 
 #[cw_serde]
 pub struct VaultBalancesResponse {
-    /// All of token0 held by the vault, but without counting protocol/admin fees.
+    /// All of token0 the vault has access to, without counting protocol/admin fees.
     pub bal0: Uint128,
-    /// All of token1 held by the vault, but without counting protocol/admin fees.
+    /// All of token1 the vault has access to, without counting protocol/admin fees.
     pub bal1: Uint128,
     pub protocol_unclaimed_fees0: Uint128,
     pub protocol_unclaimed_fees1: Uint128,

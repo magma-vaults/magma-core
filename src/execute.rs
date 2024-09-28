@@ -4,9 +4,8 @@ use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{constants::PROTOCOL, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{constants::PROTOCOL, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{FundsInfo, PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
 
-// TODO More clarifying errors. TODO Events to query positions (deposits).
 pub fn deposit(
     DepositMsg {
         amount0,
@@ -64,7 +63,16 @@ pub fn deposit(
         shares,
         usable_amount0: amount0_used,
         usable_amount1: amount1_used,
-    } = query::calc_shares_and_usable_amounts(amount0, amount1, true, deps.as_ref(), &env);
+    } = query::calc_shares_and_usable_amounts(amount0, amount1, deps.as_ref());
+
+    // Invariant: Wont overflow, as for that token balances would have to be above
+    //            `Uint128::MAX`, but thats not possible.
+    // NOTE: We refund unusued amounts later, so the update is sound.
+    FUNDS_INFO.update(deps.storage, |mut funds| -> StdResult<_>  {
+        funds.available_balance0 = funds.available_balance0.checked_add(amount0_used)?;
+        funds.available_balance1 = funds.available_balance1.checked_add(amount1_used)?;
+        Ok(funds)
+    }).unwrap();
 
     // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
 
@@ -87,9 +95,8 @@ pub fn deposit(
         execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap()
     };
 
-
     // Invariant: Share calculation should never produce usable amounts 
-    //            about actual inputed amounts.
+    //            above actual inputed amounts.
     assert!(amount0_used <= amount0 && amount1_used <= amount1);
 
     // Invariant: Wont panic because of the invariant above.
@@ -172,7 +179,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         },
     };
 
-
     // NOTE: We always update `LastPriceAndTimestamp` even if theyre not used, for
     //       semantical simplicity of the variable.
     vault_state.last_price_and_timestamp = Some(StateSnapshot {
@@ -195,7 +201,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         protocol_unclaimed_fees1,
         admin_unclaimed_fees0,
         admin_unclaimed_fees1
-    } = query::vault_balances(deps, &env);
+    } = query::vault_balances(deps);
 
     events.push(
         Event::new("vault_balances_snapshot")
@@ -212,7 +218,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     );
 
     if price.is_zero() {
-        // TODO: If pool has no price, we can deposit in any proportion.
+        // TODO: If pool has no price, we can should be bale to deposit in any proportion.
         return Err(PoolWithoutPrice(pool_id.0));
     }
 
@@ -329,11 +335,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
 
     if !base_factor.is_one() && !balanced_balance0.is_zero() {
         assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
-
-        // We take 1% slippage to check if balances have the right proportion.
-        let balances_price = base_range_balance1 / base_range_balance0;
-        assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
-        assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
     }
 
     let (limit_balance0, limit_balance1) = {
@@ -491,6 +492,10 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         ..VaultState::default()
     }).unwrap();
 
+    FUNDS_INFO.update(deps_mut.storage, |_| -> StdResult<_> {
+        Ok(FundsInfo::default())
+    }).unwrap();
+
     // Invariant: Any addition of tokens wont overflow, because for that the token
     //            max supply would have to be above `Uint128::MAX`, but thats impossible.
     FEES_INFO.update(deps_mut.storage, |mut info| -> StdResult<_> { 
@@ -523,13 +528,18 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     )
 }
 
-// TODO Test what happens if we remove liquidity with `Weight == 0`.
+/// # Returns
+///
+/// - `None`: If `liquidity_proportion == 0` or `for_position` has no open position.
+/// - `Some(_)`: Otherwise.
 pub fn remove_liquidity_msg(
     for_position: PositionType,
     deps: Deps,
     env: &Env,
     liquidity_proportion: &Weight,
 ) -> Option<MsgWithdrawPosition> {
+    if liquidity_proportion.is_zero() { return None }
+
     // Invariant: After instantiation, `VAULT_STATE` is always present.
     let position_id = VAULT_STATE
         .load(deps.storage)
@@ -591,9 +601,7 @@ pub fn create_position_msg(
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
     let upper_tick = vault_info.closest_valid_tick(upper_tick, &deps.querier).into();
 
-    // We take 1% slippage.
-    // TODO It shouldnt be needed, test rebalances without slippage.
-    let slippage = Weight::new("0.99").unwrap();
+    let slippage = Weight::new("0.997").unwrap();
 
     MsgCreatePosition {
         pool_id: pool.id,
@@ -642,7 +650,7 @@ pub fn withdraw(
         protocol_unclaimed_fees1,
         admin_unclaimed_fees0,
         admin_unclaimed_fees1
-    } = query::vault_balances(deps.as_ref(), &env);
+    } = query::vault_balances(deps.as_ref());
 
     // Invariant: Any addition of tokens wont overflow, because for that the token
     //            max supply would have to be above `Uint128::MAX`, but thats impossible.
@@ -659,7 +667,7 @@ pub fn withdraw(
     }).unwrap();
 
     // Invariant: We know that `info.sender` is a proper address, thus even if it didnt 
-    //            any shares, the query would return Uint128::zero().
+    //            own any shares, the query would return Uint128::zero().
     let shares_held = query_balance(deps.as_ref(), info.sender.clone().into())
         .unwrap()
         .balance;
@@ -681,9 +689,20 @@ pub fn withdraw(
     //            to be greater than zero. Wont overflow during Uint128 downgrade because
     //            individual shares will always be smaller than total supply, so the resulting
     //            computation will always be lower than `bal0` or `bal1`.
-    // FIXME Adapt this invariant to the Weight lift above.
     let expected_withdrawn_amount0 = shares_proportion.mul_raw(bal0).atomics();
     let expected_withdrawn_amount1 = shares_proportion.mul_raw(bal1).atomics();
+
+    // Invariant: Wont underflow as `shares_proportion` is a valid weight.
+    FUNDS_INFO.update(deps.storage, |mut funds| -> StdResult<_> {
+        funds.available_balance0 = funds.available_balance0.checked_sub(
+            shares_proportion.mul_raw(funds.available_balance0).atomics()
+        )?;
+
+        funds.available_balance1 = funds.available_balance1.checked_sub(
+            shares_proportion.mul_raw(funds.available_balance1).atomics()
+        )?;
+        Ok(funds)
+    }).unwrap();
 
     if expected_withdrawn_amount0 < amount0_min || expected_withdrawn_amount1 < amount1_min {
         return Err(WithdrawnAmontsBelowMin {
