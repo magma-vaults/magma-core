@@ -321,9 +321,7 @@ pub fn rebalance(
     //            uses full range positions, then both balances for the full
     //            range position shouldnt be zero, or the resulting position
     //            wouldnt be in proportion.
-    if full_range_weight.is_zero() {
-        assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
-    } else if balanced_balance1.is_zero() || balanced_balance0.is_zero() {
+    if full_range_weight.is_zero() || balanced_balance1.is_zero() || balanced_balance0.is_zero() {
         assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
     } else {
         assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
