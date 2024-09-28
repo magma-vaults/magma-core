@@ -1,10 +1,20 @@
 use std::str::FromStr;
 
-use cosmwasm_std::{coin, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
+use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
-use crate::{constants::PROTOCOL, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{FundsInfo, PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{price_function_inv, raw}};
+use crate::{
+    constants::PROTOCOL,
+    error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError},
+    msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg},
+    query,
+    state::{
+        FundsInfo, PositionType, StateSnapshot,
+        VaultParameters, VaultRebalancer, VaultState,
+        Weight, FEES_INFO, FUNDS_INFO,
+        VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE},
+    utils::{calc_x0, price_function_inv, raw}};
 
 pub fn deposit(
     DepositMsg {
@@ -67,14 +77,12 @@ pub fn deposit(
 
     // Invariant: Wont overflow, as for that token balances would have to be above
     //            `Uint128::MAX`, but thats not possible.
-    // NOTE: We refund unusued amounts later, so the update is sound.
+    // NOTE: The update is sound as we refund unusued amounts later.
     FUNDS_INFO.update(deps.storage, |mut funds| -> StdResult<_>  {
         funds.available_balance0 = funds.available_balance0.checked_add(amount0_used)?;
         funds.available_balance1 = funds.available_balance1.checked_add(amount1_used)?;
         Ok(funds)
     }).unwrap();
-
-    // TODO Whats `MINIMUM_LIQUIDITY`? Probably some hack to prevent weird divisions by 0.
 
     // Invariant: We already verified the inputed amounts are not zero, 
     //            thus the resulting shares can never be zero.
@@ -91,11 +99,11 @@ pub fn deposit(
         let mut info = info.clone();
         info.sender = contract_addr;
 
-        // Invariant: The only allowed minter is this contract itself.
+        // Invariant: Wont panic, as the only allowed minter is this contract itself,
         execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap()
     };
 
-    // Invariant: Share calculation should never produce usable amounts 
+    // Invariant: Share calculation should will never produce usable amounts 
     //            above actual inputed amounts.
     assert!(amount0_used <= amount0 && amount1_used <= amount1);
 
@@ -109,7 +117,6 @@ pub fn deposit(
     }))
 }
 
-// TODO Finish cleanup.
 pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Response, RebalanceError> {
     use RebalanceError::*;
 
@@ -122,62 +129,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     let pool_id = vault_info.pool_id.clone();
     let price = pool_id.price(&deps.querier);
 
-    // TODO Use other params. 
-    // TODO Refactor.
-    match vault_info.rebalancer {
-        VaultRebalancer::Admin { } => {
-            // Invariant: The rebalancer cant be `Admin` if admin is not present.
-            let admin = vault_info.admin.clone().unwrap();
-            if admin != info.sender {
-                return Err(UnauthorhizedNonAdminAccount { 
-                    admin: admin.into(), got: info.sender.into() 
-                })
-            }
-        },
-        VaultRebalancer::Delegate { ref rebalancer } => {
-            if rebalancer != info.sender {
-                return Err(UnauthorizedDelegateAccount { 
-                    delegate: rebalancer.into(), got: info.sender.into() 
-                })
-            }
-        },
-        VaultRebalancer::Anyone { 
-            ref price_factor_before_rebalance,
-            time_before_rabalance 
-        } => {
-            if let Some(StateSnapshot {
-                last_price,
-                last_timestamp
-            }) = vault_state.last_price_and_timestamp {
-                let current_time = env.block.time;
-                assert!(current_time > last_timestamp);
-
-                let threshold = last_timestamp.plus_seconds(time_before_rabalance.seconds());
-                if threshold > current_time {
-                    let time_left = current_time.minus_seconds(threshold.seconds()).seconds();
-                    return Err(NotEnoughTimePassed { time_left })
-                }
-
-                let upper_bound = last_price
-                    .checked_mul(price_factor_before_rebalance.0)
-                    .unwrap_or(Decimal::MAX);
-
-                // Invariant: Wont overflow as price factors are always greater or equal to 1
-                let lower_bound = last_price
-                    .checked_div(price_factor_before_rebalance.0)
-                    .unwrap();
-
-                if (lower_bound..=upper_bound).contains(&price) {
-                    return Err(PriceHasntMovedEnough { 
-                        price: price.to_string(),
-                        factor: price_factor_before_rebalance.0.to_string() 
-                    })
-                }
-
-            }
-            
-        },
-    };
+    can_rebalance(deps, env.clone(), info)?;
 
     // NOTE: We always update `LastPriceAndTimestamp` even if theyre not used, for
     //       semantical simplicity of the variable.
@@ -218,14 +170,12 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     );
 
     if price.is_zero() {
-        // TODO: If pool has no price, we can should be bale to deposit in any proportion.
+        // TODO: If the pool has no price, we should be able to deposit in any proportion.
+        // But we dont support that for now.
         return Err(PoolWithoutPrice(pool_id.0));
     }
 
     let (balanced_balance0, balanced_balance1) = {
-        // Assumption: `price` uses 18 decimals. TODO: Prove it! Wtf is "ToLegacyDec()" in the
-        // osmosis codebase.
-        // TODO Can we downgrade `price` to Uint128 instead?
         let bal0 = Decimal::new(bal0);
         let bal1 = Decimal::new(bal1);
 
@@ -261,45 +211,18 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         assert!(!balanced_balance0.is_zero() && !balanced_balance1.is_zero());
         assert!(!bal0.is_zero() && !bal1.is_zero());
 
-        // We take 1% slippage to check if balances have the right proportion.
+        // We take 0.3% slippage to check if balances have the right proportion.
         let balances_price = balanced_balance1 / balanced_balance0;
-        assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
-        assert!(balances_price <= price * Decimal::from_str("1.01").unwrap());
+        assert!(balances_price >= price * Decimal::from_str("0.997").unwrap());
+        assert!(balances_price <= price * Decimal::from_str("1.003").unwrap());
     }
 
-    // TODO Decouple $x_0, y_0$ computation, as its not trivial.
     let (full_range_balance0, full_range_balance1) = {
-        // TODO Document the math (see [[MagmaLiquidity]]).
-        // FIXME All those unwraps could fail under extreme conditions. Lift to Uint256?
-        // TODO PROVE SECURITY!
-        let sqrt_k = base_factor.0.sqrt();
-
-        let numerator = full_range_weight.mul_dec(&sqrt_k);
-        // Invariant: Wont overflow because we lifter to 256 bits.
-        let numerator = Decimal256::from(numerator)
-            .checked_mul(balanced_balance0.into())
-            .unwrap();
-
-        let denominator = sqrt_k
-            .checked_sub(Decimal::one())
-            .unwrap() // Invariant: `k` min value is 1, `sqrt(1) - 1 == Decimal::zero()`.
-            .checked_add(full_range_weight.0)
-            .unwrap(); // Invariant: `w` max value is 1, and we already subtracted 1.
-
-        // Invariant: Wont produce a `DivisionByZero` nor will overflow.
-        // Proof: Let `w \in [0, 1]` be the `full_range_weight`. Let `k \in [1, +\infty)`
-        //        be the `base_factor`. Then `sqrt(k) + w - 1` could only be `0` if
-        //        `sqrt(k) + w` was `1`, but thats impossible, because `w > 0 \lor k > 1`
-        //        is invariant (see `VaultParameters` instantiation). TODO The rest
-        //        of the proof is not trivial.
-        let x0 = numerator.checked_div(denominator.into()).unwrap();
-        let y0 = x0.checked_mul(price.into()).unwrap();
-        // Invariant: The downgrade wont overflow.
-        // Proof: TODO, not trivial.
-        (
-            Decimal::try_from(x0).unwrap(),
-            Decimal::try_from(y0).unwrap(),
-        )
+        let x0 = calc_x0(&base_factor, &full_range_weight, balanced_balance0);
+        // Invariant: Wont overflow.
+        // Proof: Same reasoning as the proof for x0 computation.
+        let y0 = x0.checked_mul(price).unwrap();
+        (x0, y0)
     };
 
     // Invariant: If any of the balanced balances is not zero, and if the vault
@@ -313,24 +236,21 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     } else {
         assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
 
-        // We take 1% slippage to check if balances have the right proportion.
+        // We take 0.3% slippage to check if balances have the right proportion.
         let balances_price = full_range_balance1 / full_range_balance0;
-        assert!(balances_price >= price * Decimal::from_str("0.99").unwrap());
-        assert!(balances_price <= price * Decimal::from_str("1.01").unwrap())
+        assert!(balances_price >= price * Decimal::from_str("0.997").unwrap());
+        assert!(balances_price <= price * Decimal::from_str("1.003").unwrap())
     }
 
     let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
         // Invariant: Wont overflow, because full range balances will always be
-        //            lower than the total balanced balances.
-        // Proof: TODO, but if we prove that $x_0 < X$, then that also proves
-        //        that $x_0$ can be safely downgraded to 128 bits.
+        //            lower than the total balanced balances (see `calc_x0`).
         let base_range_balance0 = balanced_balance0.checked_sub(full_range_balance0).unwrap();
-
         let base_range_balance1 = balanced_balance1.checked_sub(full_range_balance1).unwrap();
 
         (base_range_balance0, base_range_balance1)
     } else {
-        (Decimal::one(), Decimal::one())
+        (Decimal::zero(), Decimal::zero())
     };
 
     if !base_factor.is_one() && !balanced_balance0.is_zero() {
@@ -443,7 +363,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
             ))
         } else if limit_balance1.is_zero() {
             let upper_price = price.checked_mul(limit_factor.0).unwrap_or(Decimal::MAX);
-
             let upper_tick = price_function_inv(&upper_price);
 
             // Invariant: Ticks nor Ticks spacings will never be large enough to
@@ -526,6 +445,70 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         .add_messages(liquidity_removal_msgs)
         .add_submessages(new_position_msgs)
     )
+}
+
+fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), RebalanceError> {
+    use RebalanceError::*;
+    
+    let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+    let vault_state = VAULT_STATE.load(deps.storage).unwrap();
+    let price = vault_info.pool_id.price(&deps.querier);
+    
+    match vault_info.rebalancer {
+        VaultRebalancer::Admin { } => {
+            // Invariant: The rebalancer cant be `Admin` if admin is not present.
+            let admin = vault_info.admin.clone().unwrap();
+            if admin != info.sender {
+                return Err(UnauthorhizedNonAdminAccount { 
+                    admin: admin.into(), got: info.sender.into() 
+                })
+            }
+        },
+        VaultRebalancer::Delegate { ref rebalancer } => {
+            if rebalancer != info.sender {
+                return Err(UnauthorizedDelegateAccount { 
+                    delegate: rebalancer.into(), got: info.sender.into() 
+                })
+            }
+        },
+        VaultRebalancer::Anyone { 
+            ref price_factor_before_rebalance,
+            time_before_rabalance 
+        } => {
+            if let Some(StateSnapshot {
+                last_price,
+                last_timestamp
+            }) = vault_state.last_price_and_timestamp {
+                let current_time = env.block.time;
+                assert!(current_time > last_timestamp);
+
+                let threshold = last_timestamp.plus_seconds(time_before_rabalance.seconds());
+                if threshold > current_time {
+                    let time_left = current_time.minus_seconds(threshold.seconds()).seconds();
+                    return Err(NotEnoughTimePassed { time_left })
+                }
+
+                let upper_bound = last_price
+                    .checked_mul(price_factor_before_rebalance.0)
+                    .unwrap_or(Decimal::MAX);
+
+                // Invariant: Wont overflow as price factors are always greater or equal to 1
+                let lower_bound = last_price
+                    .checked_div(price_factor_before_rebalance.0)
+                    .unwrap();
+
+                if (lower_bound..=upper_bound).contains(&price) {
+                    return Err(PriceHasntMovedEnough { 
+                        price: price.to_string(),
+                        factor: price_factor_before_rebalance.0.to_string() 
+                    })
+                }
+
+            }
+            
+        },
+    };
+    Ok(())
 }
 
 /// # Returns
@@ -614,7 +597,6 @@ pub fn create_position_msg(
     }
 }
 
-// TODO Clean function.
 pub fn withdraw(
     WithdrawMsg {
         shares,
@@ -627,9 +609,7 @@ pub fn withdraw(
     info: MessageInfo,
 ) -> Result<Response, WithdrawalError> {
     use WithdrawalError::*;
-    if shares.is_zero() {
-        return Err(ZeroSharesWithdrawal {});
-    }
+    if shares.is_zero() { return Err(ZeroSharesWithdrawal {}) }
 
     let withdrawal_address = deps
         .api
@@ -684,11 +664,6 @@ pub fn withdraw(
         shares_held.checked_div(total_shares_supply).unwrap()
     ).unwrap();
 
-    // Invariant: Wont overflow because we lifted to Uint256. Wont produce a division
-    //            by zero error because for shares to exist, the total supply has
-    //            to be greater than zero. Wont overflow during Uint128 downgrade because
-    //            individual shares will always be smaller than total supply, so the resulting
-    //            computation will always be lower than `bal0` or `bal1`.
     let expected_withdrawn_amount0 = shares_proportion.mul_raw(bal0).atomics();
     let expected_withdrawn_amount1 = shares_proportion.mul_raw(bal1).atomics();
 
@@ -749,7 +724,7 @@ pub fn withdraw(
     let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
 
     let shares_burn_response = execute_burn(deps, env.clone(), info, shares).map_err(|_| {
-        InalidWithdrawalAmount {
+        InvalidWithdrawalAmount {
             owned: shares_held.atomics().into(),
             withdrawn: shares.into(),
         }

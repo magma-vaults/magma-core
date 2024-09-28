@@ -1,6 +1,6 @@
 use std::str::FromStr;
-use cosmwasm_std::{Decimal, Int128, SignedDecimal256, Uint128};
-use crate::state::PositiveDecimal;
+use cosmwasm_std::{Decimal, Decimal256, Int128, SignedDecimal256, Uint128};
+use crate::state::{PositiveDecimal, PriceFactor, Weight};
 
 /// Used to chain anyhow::Result computations 
 /// without closure boilerplate.
@@ -51,7 +51,9 @@ pub fn raw<T: From<Uint128>>(d: &Decimal) -> T {
     d.atomics().into()
 }
 
-// TODO Check proof for output type `i32`, not `i64`.
+// TODO: Prove downgrade to i32 is safe.
+/// Generalized inverse of Osmosis price function. Thus, it will
+/// map each price to its closest tick.
 pub fn price_function_inv(p: &Decimal) -> i32 {
     let maybe_neg_pow = |exp: i32| {
         let ten = SignedDecimal256::from_str("10").unwrap();
@@ -84,7 +86,43 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
         x.i128().try_into().ok()
     };
 
-    // Invariant: Price function inverse computation doesnt overflow under i256.
-    //     Proof: See whitepaper theorem 5.
+    // Invariant: Wont overflow/underflow under i256.
+    // Proof: I have the proof in a obsidian note, TODO I need to
+    //        properly formalize it in doc or a whitepaper.
     compute_price_inverse(p).unwrap()
 }
+
+/// # Arguments
+///
+/// * `k` - Price factor for the base range position.
+/// * `w` - Weight for the full range position.
+/// * `x` - Amount of token0 to be used for the full range position
+///         and the base one. Thus, `y = p*x`.
+///
+/// # Returns
+///
+/// The amount of token0 `x0` to use in a full range position for
+/// its liquidity to be `w*L`, where `L` is the total liquidity
+/// of both, the full range position, and the base one. Read
+/// whitepaper for further clarification (TODO).
+pub fn calc_x0(k: &PriceFactor, w: &Weight, x: Decimal) -> Decimal {
+    if w.is_zero() { return Decimal::zero() }
+    // Invariant: Wont overflow.
+    // Proof: I have the proof in a obsidian note, TODO I need to
+    //        properly formalize it in doc or a whitepaper.
+    do_me! {
+        let sqrt_k = k.0.sqrt();
+
+        let numerator = w.mul_dec(&sqrt_k);
+        let numerator = Decimal256::from(numerator)
+            .checked_mul(x.into())?;
+
+        let denominator = sqrt_k
+            .checked_sub(Decimal::one())?
+            .checked_add(w.0)?;
+
+        let x0 = numerator.checked_div(denominator.into())?;
+        Decimal::try_from(x0)?
+    }.unwrap()
+}
+

@@ -46,7 +46,7 @@ pub fn instantiate(
     };
 
     // Invariant: No state serializaton will panic, as we already ensured
-    //            theyre proper during development.
+    //            the types are proper during development.
     do_me! {
         VAULT_INFO.save(deps.storage, &vault_info)?;
         VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
@@ -60,7 +60,7 @@ pub fn instantiate(
 }
 
 #[entry_point]
-pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use QueryMsg::*;
     match msg {
         VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
@@ -76,18 +76,10 @@ pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
             deps
         )),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
-        VaultState {} => {
-            // Invariant: Any state is present after instantiation.
-            to_json_binary(&VAULT_STATE.load(deps.storage).unwrap())
-        },
-        VaultInfo {} => {
-            // Invariant: Any state is present after instantiation.
-            to_json_binary(&VAULT_INFO.load(deps.storage).unwrap())
-        },
-        FeesInfo {} => {
-            // Invariant: Any state is present after instantiation.
-            to_json_binary(&FEES_INFO.load(deps.storage).unwrap())
-        },
+        // Invariant: Any state is present after instantiation.
+        VaultState {} => to_json_binary(&VAULT_STATE.load(deps.storage).unwrap()),
+        VaultInfo {} => to_json_binary(&VAULT_INFO.load(deps.storage).unwrap()),
+        FeesInfo {} => to_json_binary(&FEES_INFO.load(deps.storage).unwrap()),
         TokenInfo {} => to_json_binary(&query_token_info(deps)?),
     }
 }
@@ -114,7 +106,6 @@ pub fn execute(
     }
 }
 
-// TODO: Use const IDs.
 #[entry_point]
 pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
     // Invariant: We only use position creation submessages.

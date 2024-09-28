@@ -106,7 +106,7 @@ pub enum WithdrawalError {
     CantWithdrawToContract(String),
 
     #[error("Trying to withdraw more shares than owned (owned: {owned}, withdrawn: {withdrawn})")]
-    InalidWithdrawalAmount { owned: String, withdrawn: String },
+    InvalidWithdrawalAmount { owned: String, withdrawn: String },
 
     #[error("Withdrawn amounts below min wanted amounts: got: {got}, wanted: {wanted}")]
     WithdrawnAmontsBelowMin { got: String, wanted: String }

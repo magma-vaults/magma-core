@@ -158,10 +158,10 @@ pub fn position_balances_with_fees(
 /// # Arguments
 ///
 /// * `input_amount0` - Amount of token0 for which we want to calculate shares for, 
-/// not yet in the contract state ([`FUNDS_INFO`]).
+///                     not yet in the contract state ([`FUNDS_INFO`]).
 ///
 /// * `input_amount1` - Amount of token1 for which we want to calculate shares for, 
-/// not yet in the contract state ([`FUNDS_INFO`]).
+///                     not yet in the contract state ([`FUNDS_INFO`]).
 pub fn calc_shares_and_usable_amounts(
     input_amount0: Uint128,
     input_amount1: Uint128,
@@ -225,8 +225,6 @@ pub fn calc_shares_and_usable_amounts(
         let total0: Uint256 = total0.into();
         let total1: Uint256 = total1.into();
 
-        // Invariant: Wont panic.
-        // Proof: TODO.
         do_me! {
             let cross = cmp::min(
                 input_amount0.checked_mul(total1)?,
