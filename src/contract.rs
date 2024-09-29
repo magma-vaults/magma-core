@@ -130,7 +130,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee}, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee}, utils::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
@@ -672,7 +672,7 @@ mod test {
         let pool_mockup = PoolMockup::new(pool_x, pool_y);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        let (vault_x, vault_y) = (1_000, 1_500);
+        let (vault_x, vault_y) = (10_000, 15_000);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
         let vault_bals_before_withdrawal = vault_mockup.vault_balances_query();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
@@ -682,8 +682,8 @@ mod test {
 
         assert_eq!(vault_bals_before_withdrawal.bal0, Uint128::new(vault_x));
         assert_eq!(vault_bals_before_withdrawal.bal1, Uint128::new(vault_y));
-        assert!(vault_bals_after_withdrawal.bal0.is_zero());
-        assert!(vault_bals_after_withdrawal.bal1.is_zero());
+        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY);
+        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY);
     }
 
 
@@ -703,7 +703,7 @@ mod test {
         vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
 
         assert!(vault_mockup.vault_balances_query().bal0.is_zero());
-        assert!(vault_mockup.vault_balances_query().bal1.is_zero());
+        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY);
     }
 
     #[test]
@@ -712,7 +712,7 @@ mod test {
         let pool_mockup = PoolMockup::new(pool_x, pool_y);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        let (vault_x, vault_y) = (1_000, 1_500);
+        let (vault_x, vault_y) = (10_000, 15_000);
 
         let improper_deposit = vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
@@ -771,8 +771,8 @@ mod test {
             &ExecuteMsg::Withdraw(
                 WithdrawMsg {
                     shares: shares_got,
-                    amount0_min: vault_balances_before_withdrawal.bal0,
-                    amount1_min: vault_balances_before_withdrawal.bal1,
+                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY,
+                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY,
                     to: pool_mockup.user1.address()
                 }
             ),
@@ -782,8 +782,8 @@ mod test {
 
         let vault_balances_after_withdrawal = vault_mockup.vault_balances_query();
 
-        assert!(vault_balances_after_withdrawal.bal0.is_zero());
-        assert!(vault_balances_after_withdrawal.bal1.is_zero());
+        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY);
+        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY);
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
     }
@@ -892,4 +892,17 @@ mod test {
         );
         assert!(should_err.is_err());
     }
+
+    #[test]
+    fn min_liquidity_attack() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
+        vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
+    }
+
 }

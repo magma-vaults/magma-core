@@ -1,11 +1,11 @@
 use std::str::FromStr;
 
 use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
-use cw20_base::contract::{execute_burn, execute_mint, query_balance, query_token_info};
+use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_token_info}, state::TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
 use crate::{
-    constants::PROTOCOL,
+    constants::{MIN_LIQUIDITY, PROTOCOL},
     error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError},
     msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg},
     query,
@@ -97,10 +97,25 @@ pub fn deposit(
 
     let res = {
         let mut info = info.clone();
+        let mut deps = deps;
         info.sender = contract_addr;
 
+        // Invariant: Any state is present after initialization.
+        let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
+
         // Invariant: Wont panic, as the only allowed minter is this contract itself,
-        execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap()
+        let min_mint = if total_supply.is_zero() {
+            execute_mint(
+                deps.branch(),
+                env.clone(),
+                info.clone(),
+                info.sender.clone().into(),
+                MIN_LIQUIDITY
+            ).unwrap()
+        } else { Response::new() };
+
+        let user_mint = execute_mint(deps, env, info, new_holder.to_string(), shares).unwrap();
+        min_mint.add_attributes(user_mint.attributes)
     };
 
     // Invariant: Share calculation should will never produce usable amounts 
