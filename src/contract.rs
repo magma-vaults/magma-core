@@ -543,21 +543,21 @@ mod test {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
+        vault_mockup.deposit(10_123, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Dual case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(0, 42, &pool_mockup.user1).unwrap();
+        vault_mockup.deposit(0, 10_123, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         // Combined case
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(42, 0, &pool_mockup.user1).unwrap();
+        vault_mockup.deposit(10_123, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         assert!(vault_mockup.vault_state_query().limit_position_id.is_some());
         assert!(vault_mockup.vault_state_query().full_range_position_id.is_none());
@@ -642,7 +642,7 @@ mod test {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        let (vault_x, vault_y) = (1_000, 1_000);
+        let (vault_x, vault_y) = (10_000, 10_000);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
@@ -657,7 +657,7 @@ mod test {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        let (vault_x, vault_y) = (1_000, 1_500);
+        let (vault_x, vault_y) = (10_000, 15_000);
         vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
@@ -682,8 +682,8 @@ mod test {
 
         assert_eq!(vault_bals_before_withdrawal.bal0, Uint128::new(vault_x));
         assert_eq!(vault_bals_before_withdrawal.bal1, Uint128::new(vault_y));
-        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY);
-        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY);
+        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
     }
 
 
@@ -703,7 +703,7 @@ mod test {
         vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
 
         assert!(vault_mockup.vault_balances_query().bal0.is_zero());
-        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY);
+        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
     }
 
     #[test]
@@ -756,8 +756,8 @@ mod test {
             &ExecuteMsg::Withdraw(
                 WithdrawMsg {
                     shares: shares_got,
-                    amount0_min: vault_balances_before_withdrawal.bal0 + Uint128::one(),
-                    amount1_min: vault_balances_before_withdrawal.bal1 + Uint128::one(),
+                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY,
+                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY,
                     to: pool_mockup.user1.address()
                 }
             ),
@@ -771,8 +771,8 @@ mod test {
             &ExecuteMsg::Withdraw(
                 WithdrawMsg {
                     shares: shares_got,
-                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY,
-                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY,
+                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY - Uint128::one(),
+                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY - Uint128::one(),
                     to: pool_mockup.user1.address()
                 }
             ),
@@ -782,8 +782,8 @@ mod test {
 
         let vault_balances_after_withdrawal = vault_mockup.vault_balances_query();
 
-        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY);
-        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY);
+        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
     }
@@ -897,11 +897,13 @@ mod test {
     fn min_liquidity_attack() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user1).unwrap();
-        let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
+
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
     }
 

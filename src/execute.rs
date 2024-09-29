@@ -69,6 +69,13 @@ pub fn deposit(
         return Err(ShareholderCantBeContract(new_holder.into()));
     }
 
+    if !(amount0 > MIN_LIQUIDITY || amount1 > MIN_LIQUIDITY) {
+        return Err(DepositedAmountBelowMinLiquidity { 
+            min_liquidity: MIN_LIQUIDITY.into(),
+            got: format!("({}, {})", amount0, amount1)
+        })
+    }
+
     let CalcSharesAndUsableAmountsResponse {
         shares,
         usable_amount0: amount0_used,
@@ -89,7 +96,7 @@ pub fn deposit(
     assert!(!shares.is_zero());
 
     if amount0_used < amount0_min || amount1_used < amount1_min {
-        return Err(DepositedAmontsBelowMin {
+        return Err(DepositedAmountsBelowMin {
             used: format!("({}, {})", amount0_used, amount1_used),
             wanted: format!("({}, {})", amount0_min, amount1_min),
         });

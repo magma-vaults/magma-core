@@ -4,7 +4,7 @@ use cosmwasm_std::{Deps, Uint128, Uint256};
 use cw20_base::state::TOKEN_INFO;
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::PositionByIdRequest;
 
-use crate::{do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE}};
+use crate::{constants::MIN_LIQUIDITY, do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE}};
 
 /// Partition available balances to the vault in 3 sets:
 /// - Balances available for business logic, e.g., for creating new positions.
@@ -173,8 +173,10 @@ pub fn calc_shares_and_usable_amounts(
     let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;
 
     if total_supply.is_zero() {
+        // Invariant: Wont overflow. See [`DepositError::DepositedAmountBelowMinLiquidity`].
         CalcSharesAndUsableAmountsResponse {
-            shares: cmp::max(input_amount0, input_amount1),
+            shares: cmp::max(input_amount0, input_amount1)
+                .checked_sub(MIN_LIQUIDITY).unwrap(),
             usable_amount0: input_amount0,
             usable_amount1: input_amount1,
         }

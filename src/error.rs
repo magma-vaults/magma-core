@@ -70,7 +70,10 @@ pub enum DepositError {
     InvalidShareholderAddress(String),
 
     #[error("Used amounts below min wanted amounts: used: {used}, wanted: {wanted}")]
-    DepositedAmontsBelowMin { used: String, wanted: String }
+    DepositedAmountsBelowMin { used: String, wanted: String },
+
+    #[error("Deposit must be above {min_liquidity}, got: {got}")]
+    DepositedAmountBelowMinLiquidity { min_liquidity: String, got: String }
 }
 
 #[derive(Error, Debug, PartialEq)]
