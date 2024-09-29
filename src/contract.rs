@@ -1,14 +1,12 @@
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdResult, Uint128
+    StdResult, Uint128,
 };
 use cw20_base::contract::{query_balance, query_token_info};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 
-use crate::msg::
-    QueryMsg
-;
+use crate::msg::QueryMsg;
 use crate::state::{FeesInfo, FundsInfo, FEES_INFO, FUNDS_INFO};
 use crate::{do_me, execute, query};
 use crate::{
@@ -24,9 +22,8 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
-
     if !info.funds.is_empty() {
-        return Err(ContractError::NonPayable("instantiate".into()))
+        return Err(ContractError::NonPayable("instantiate".into()));
     }
 
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
@@ -54,7 +51,8 @@ pub fn instantiate(
         FEES_INFO.save(deps.storage, &protocol_info)?;
         FUNDS_INFO.save(deps.storage, &funds_info)?;
         TOKEN_INFO.save(deps.storage, &token_info)?;
-    }.unwrap();
+    }
+    .unwrap();
 
     Ok(Response::new())
 }
@@ -64,16 +62,16 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use QueryMsg::*;
     match msg {
         VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
-        PositionBalancesWithFees { position_type } => to_json_binary(
-            &query::position_balances_with_fees(position_type, deps),
-        ),
+        PositionBalancesWithFees { position_type } => {
+            to_json_binary(&query::position_balances_with_fees(position_type, deps))
+        }
         CalcSharesAndUsableAmounts {
             for_amount0,
             for_amount1,
         } => to_json_binary(&query::calc_shares_and_usable_amounts(
             for_amount0,
             for_amount1,
-            deps
+            deps,
         )),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
         // Invariant: Any state is present after instantiation.
@@ -94,7 +92,7 @@ pub fn execute(
     use ExecuteMsg::*;
 
     if !matches!(msg, Deposit(_)) && !info.funds.is_empty() {
-        return Err(ContractError::NonPayable(format!("{:?}", msg)))
+        return Err(ContractError::NonPayable(format!("{:?}", msg)));
     }
 
     match msg {
@@ -130,16 +128,34 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee}, utils::price_function_inv};
+    use crate::{
+        assert_approx_eq,
+        constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK},
+        msg::{
+            DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse,
+            VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg,
+            WithdrawMsg,
+        },
+        state::{PositionType, ProtocolFee},
+        utils::price_function_inv,
+    };
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
-    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{
-        concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord
-        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}}
-    ;
-    use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
+    use osmosis_std::types::{
+        cosmos::bank::v1beta1::QueryBalanceRequest,
+        cosmwasm::wasm::v1::MsgExecuteContractResponse,
+        osmosis::{
+            concentratedliquidity::v1beta1::{
+                CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord,
+            },
+            poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
+        },
+    };
+    use osmosis_test_tube::{
+        Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module,
+        OsmosisTestApp, PoolManager, SigningAccount, Wasm,
+    };
 
     const USDC_DENOM: &str = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
     const OSMO_DENOM: &str = "uosmo";
@@ -156,7 +172,7 @@ mod test {
     impl PoolMockup {
         fn new(usdc_in: u128, osmo_in: u128) -> Self {
             let app = OsmosisTestApp::new();
-            
+
             let init_coins = &[
                 Coin::new(1_000_000_000_000u128, USDC_DENOM),
                 Coin::new(1_000_000_000_000u128, OSMO_DENOM),
@@ -180,8 +196,8 @@ mod test {
                         denom0: USDC_DENOM.into(),
                         denom1: OSMO_DENOM.into(),
                         tick_spacing: 100,
-                        spread_factor: Decimal::from_str("0.01").unwrap().atomics().into()
-                    }]
+                        spread_factor: Decimal::from_str("0.01").unwrap().atomics().into(),
+                    }],
                 },
                 deployer.address(),
                 &deployer,
@@ -216,44 +232,59 @@ mod test {
             let _price = Decimal::new(osmo_in.into()) / Decimal::new(usdc_in.into());
 
             Self {
-                pool_id, app, deployer, user1, user2, _price
+                pool_id,
+                app,
+                deployer,
+                user1,
+                user2,
+                _price,
             }
         }
 
-        fn swap_osmo_for_usdc(&self, from: &SigningAccount, osmo_in: u128) -> anyhow::Result<Uint128> {
+        fn swap_osmo_for_usdc(
+            &self,
+            from: &SigningAccount,
+            osmo_in: u128,
+        ) -> anyhow::Result<Uint128> {
             let pm = PoolManager::new(&self.app);
-            let usdc_got = pm.swap_exact_amount_in(
-                MsgSwapExactAmountIn {
-                    sender: from.address(),
-                    routes: vec![SwapAmountInRoute {
-                        pool_id: self.pool_id,
-                        token_out_denom: USDC_DENOM.into(),
-                    }],
-                    token_in: Some(Coin::new(osmo_in, OSMO_DENOM).into()),
-                    token_out_min_amount: "1".into(),
-                },
-                from
-            )
+            let usdc_got = pm
+                .swap_exact_amount_in(
+                    MsgSwapExactAmountIn {
+                        sender: from.address(),
+                        routes: vec![SwapAmountInRoute {
+                            pool_id: self.pool_id,
+                            token_out_denom: USDC_DENOM.into(),
+                        }],
+                        token_in: Some(Coin::new(osmo_in, OSMO_DENOM).into()),
+                        token_out_min_amount: "1".into(),
+                    },
+                    from,
+                )
                 .map(|x| x.data.token_out_amount)
                 .map(|amount| Uint128::from_str(&amount).unwrap());
 
             Ok(usdc_got?)
         }
 
-        fn swap_usdc_for_osmo(&self, from: &SigningAccount, usdc_in: u128) -> anyhow::Result<Uint128> {
+        fn swap_usdc_for_osmo(
+            &self,
+            from: &SigningAccount,
+            usdc_in: u128,
+        ) -> anyhow::Result<Uint128> {
             let pm = PoolManager::new(&self.app);
-            let usdc_got = pm.swap_exact_amount_in(
-                MsgSwapExactAmountIn {
-                    sender: from.address(),
-                    routes: vec![SwapAmountInRoute {
-                        pool_id: self.pool_id,
-                        token_out_denom: OSMO_DENOM.into(),
-                    }],
-                    token_in: Some(Coin::new(usdc_in, USDC_DENOM).into()),
-                    token_out_min_amount: "1".into(),
-                },
-                from
-            )
+            let usdc_got = pm
+                .swap_exact_amount_in(
+                    MsgSwapExactAmountIn {
+                        sender: from.address(),
+                        routes: vec![SwapAmountInRoute {
+                            pool_id: self.pool_id,
+                            token_out_denom: OSMO_DENOM.into(),
+                        }],
+                        token_in: Some(Coin::new(usdc_in, USDC_DENOM).into()),
+                        token_out_min_amount: "1".into(),
+                    },
+                    from,
+                )
                 .map(|x| x.data.token_out_amount)
                 .map(|amount| Uint128::from_str(&amount).unwrap());
 
@@ -262,19 +293,29 @@ mod test {
 
         fn osmo_balance_query(&self, address: &str) -> Uint128 {
             let bank = Bank::new(&self.app);
-            let amount = bank.query_balance(&QueryBalanceRequest{
-                address: address.into(),
-                denom: OSMO_DENOM.into()
-            }).unwrap().balance.unwrap().amount;
+            let amount = bank
+                .query_balance(&QueryBalanceRequest {
+                    address: address.into(),
+                    denom: OSMO_DENOM.into(),
+                })
+                .unwrap()
+                .balance
+                .unwrap()
+                .amount;
             Uint128::from_str(&amount).unwrap()
         }
 
         fn usdc_balance_query(&self, address: &str) -> Uint128 {
             let bank = Bank::new(&self.app);
-            let amount = bank.query_balance(&QueryBalanceRequest{
-                address: address.into(),
-                denom: USDC_DENOM.into()
-            }).unwrap().balance.unwrap().amount;
+            let amount = bank
+                .query_balance(&QueryBalanceRequest {
+                    address: address.into(),
+                    denom: USDC_DENOM.into(),
+                })
+                .unwrap()
+                .balance
+                .unwrap()
+                .amount;
             Uint128::from_str(&amount).unwrap()
         }
     }
@@ -294,13 +335,13 @@ mod test {
             full_range_weight: full.into(),
             base_factor: base.into(),
             limit_factor: limit.into(),
-            admin_fee: ProtocolFee::default().0.0.to_string()
+            admin_fee: ProtocolFee::default().0 .0.to_string(),
         }
     }
 
     struct VaultMockup<'a> {
         vault_addr: Addr,
-        wasm: Wasm<'a, OsmosisTestApp>
+        wasm: Wasm<'a, OsmosisTestApp>,
     }
 
     impl VaultMockup<'_> {
@@ -318,7 +359,7 @@ mod test {
                             vault_name: "My USDC/OSMO vault".into(),
                             vault_symbol: "USDCOSMOV".into(),
                             admin: Some(pool_info.deployer.address()),
-                            rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                            rebalancer: VaultRebalancerInstantiateMsg::Admin {},
                         },
                         vault_parameters: params,
                     },
@@ -340,14 +381,14 @@ mod test {
             &self,
             amount0: u128,
             amount1: u128,
-            from: &SigningAccount
+            from: &SigningAccount,
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             let execute_msg = &ExecuteMsg::Deposit(DepositMsg {
                 amount0: Uint128::new(amount0),
                 amount1: Uint128::new(amount1),
                 amount0_min: Uint128::zero(),
                 amount1_min: Uint128::zero(),
-                to: from.address()
+                to: from.address(),
             });
 
             let coin0 = Coin::new(amount0, USDC_DENOM);
@@ -356,112 +397,114 @@ mod test {
             if amount0 == 0 && amount1 == 0 {
                 unimplemented!()
             } else if amount0 == 0 {
-                Ok(self.wasm.execute(
-                    self.vault_addr.as_ref(),
-                    execute_msg,
-                    &[coin1],
-                    from
-                )?)
+                Ok(self
+                    .wasm
+                    .execute(self.vault_addr.as_ref(), execute_msg, &[coin1], from)?)
             } else if amount1 == 0 {
-                Ok(self.wasm.execute(
-                    self.vault_addr.as_ref(),
-                    execute_msg,
-                    &[coin0],
-                    from
-                )?)
+                Ok(self
+                    .wasm
+                    .execute(self.vault_addr.as_ref(), execute_msg, &[coin0], from)?)
             } else {
                 Ok(self.wasm.execute(
                     self.vault_addr.as_ref(),
                     execute_msg,
                     &[coin0, coin1],
-                    from
+                    from,
                 )?)
             }
         }
 
         fn rebalance(
             &self,
-            from: &SigningAccount
+            from: &SigningAccount,
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
-                self.vault_addr.as_ref(), &ExecuteMsg::Rebalance {}, &[], from
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::Rebalance {},
+                &[],
+                from,
             )?)
         }
 
         fn withdraw(
             &self,
             shares: Uint128,
-            from: &SigningAccount
+            from: &SigningAccount,
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
                 self.vault_addr.as_ref(),
-                &ExecuteMsg::Withdraw(WithdrawMsg{
+                &ExecuteMsg::Withdraw(WithdrawMsg {
                     shares,
                     amount0_min: Uint128::zero(),
                     amount1_min: Uint128::zero(),
-                    to: from.address()
+                    to: from.address(),
                 }),
                 &[],
-                from
+                from,
             )?)
         }
 
         fn admin_withdraw(
             &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>>{
+            from: &SigningAccount,
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
-                self.vault_addr.as_ref()   ,
+                self.vault_addr.as_ref(),
                 &ExecuteMsg::WithdrawAdminFees {},
                 &[],
-                from
+                from,
             )?)
         }
 
         fn vault_balances_query(&self) -> VaultBalancesResponse {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::VaultBalances { }
-            ).unwrap()
+            self.wasm
+                .query(self.vault_addr.as_ref(), &QueryMsg::VaultBalances {})
+                .unwrap()
         }
 
-        fn position_balances_query(&self, position_type: PositionType) -> PositionBalancesWithFeesResponse {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::PositionBalancesWithFees { position_type },
-            ).unwrap()
+        fn position_balances_query(
+            &self,
+            position_type: PositionType,
+        ) -> PositionBalancesWithFeesResponse {
+            self.wasm
+                .query(
+                    self.vault_addr.as_ref(),
+                    &QueryMsg::PositionBalancesWithFees { position_type },
+                )
+                .unwrap()
         }
 
         fn token_info_query(&self) -> TokenInfo {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::TokenInfo {  }
-            ).unwrap()
+            self.wasm
+                .query(self.vault_addr.as_ref(), &QueryMsg::TokenInfo {})
+                .unwrap()
         }
 
         fn shares_query(&self, address: &str) -> Uint128 {
-            let res: cw20::BalanceResponse = self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::Balance { address: address.into() }
-            ).unwrap();
+            let res: cw20::BalanceResponse = self
+                .wasm
+                .query(
+                    self.vault_addr.as_ref(),
+                    &QueryMsg::Balance {
+                        address: address.into(),
+                    },
+                )
+                .unwrap();
             res.balance
         }
 
         fn vault_state_query(&self) -> VaultState {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::VaultState {}
-            ).unwrap()
+            self.wasm
+                .query(self.vault_addr.as_ref(), &QueryMsg::VaultState {})
+                .unwrap()
         }
 
         fn vault_fees_query(&self) -> FeesInfo {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::FeesInfo {}
-            ).unwrap()
+            self.wasm
+                .query(self.vault_addr.as_ref(), &QueryMsg::FeesInfo {})
+                .unwrap()
         }
     }
-
 
     #[test]
     fn price_function_inv_test() {
@@ -491,13 +534,14 @@ mod test {
         }
     }
 
-
     #[test]
     fn normal_rebalances() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(1_000, 1_500, &pool_mockup.user1)
+            .unwrap();
         let bals = vault_mockup.vault_balances_query();
         assert_eq!(bals.bal0.u128(), 1_000);
         assert_eq!(bals.bal1.u128(), 1_500);
@@ -506,13 +550,17 @@ mod test {
         let full_range_position = vault_mockup.position_balances_query(PositionType::FullRange);
 
         // \[
-        //   x_0 = \frac{\sqrt k X w}{\sqrt k - 1 + w} 
+        //   x_0 = \frac{\sqrt k X w}{\sqrt k - 1 + w}
         //       = \frac{\sqrt 2 \cdot 750 \cdot 0.55}{\sqrt 2 - 1 + 0.55 }
         //       \approx 605$
         // \]
         assert_approx_eq!(full_range_position.bal0, Uint128::new(605), Uint128::new(5));
         // \[ y_0 = x_0 p \]
-        assert_approx_eq!(full_range_position.bal1, Uint128::new(605 * 2), Uint128::new(5));
+        assert_approx_eq!(
+            full_range_position.bal1,
+            Uint128::new(605 * 2),
+            Uint128::new(5)
+        );
     }
 
     #[test]
@@ -520,7 +568,9 @@ mod test {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(1_000, 1_500, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
 
@@ -530,11 +580,16 @@ mod test {
         let pool_balance1 = 200_000;
         let pool_mockup = PoolMockup::new(pool_balance0, pool_balance1);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        
-        vault_mockup.deposit(pool_balance0/2, pool_balance1/2, &pool_mockup.user1).unwrap();
+
+        vault_mockup
+            .deposit(pool_balance0 / 2, pool_balance1 / 2, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         assert!(vault_mockup.vault_state_query().limit_position_id.is_none());
-        assert!(vault_mockup.vault_state_query().full_range_position_id.is_some());
+        assert!(vault_mockup
+            .vault_state_query()
+            .full_range_position_id
+            .is_some());
         assert!(vault_mockup.vault_state_query().base_position_id.is_some());
     }
 
@@ -560,7 +615,10 @@ mod test {
         vault_mockup.deposit(10_123, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         assert!(vault_mockup.vault_state_query().limit_position_id.is_some());
-        assert!(vault_mockup.vault_state_query().full_range_position_id.is_none());
+        assert!(vault_mockup
+            .vault_state_query()
+            .full_range_position_id
+            .is_none());
         assert!(vault_mockup.vault_state_query().base_position_id.is_none());
 
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
@@ -580,7 +638,7 @@ mod test {
     fn full_limit_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        
+
         vault_mockup.deposit(50_000, 0, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
@@ -596,13 +654,17 @@ mod test {
     fn full_balanced_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        
-        vault_mockup.deposit(10_000, 20_000, &pool_mockup.user1).unwrap();
+
+        vault_mockup
+            .deposit(10_000, 20_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
 
-        vault_mockup.deposit(10_000, 20_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(10_000, 20_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
@@ -612,29 +674,20 @@ mod test {
     fn full_liquidation() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        
-        vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
+
+        vault_mockup
+            .deposit(10_000, 25_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
 
-        vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(10_000, 25_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
-    }
-
-    #[test]
-    fn no_limit_position_on_rebalance() {
-        panic!("TODO: Calc expression to get amount variations for the balances to get in proportion");
-        // let pool_mockup = PoolMockup::new(100_000, 200_000);
-        // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-        //     base_factor: "2".into(),
-        //     limit_factor: "1.45".into(),
-        //     full_range_weight: "0.55".into(),
-        // });
-        // 
-        // vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
     }
 
     #[test]
@@ -643,12 +696,18 @@ mod test {
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (10_000, 10_000);
-        vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(vault_x, vault_y, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
-        let usdc_got = pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, vault_y/10).unwrap();
+        let usdc_got = pool_mockup
+            .swap_osmo_for_usdc(&pool_mockup.user1, vault_y / 10)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
-        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, usdc_got.into()).unwrap();
+        pool_mockup
+            .swap_usdc_for_osmo(&pool_mockup.user1, usdc_got.into())
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
 
@@ -658,13 +717,18 @@ mod test {
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (10_000, 15_000);
-        vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(vault_x, vault_y, &pool_mockup.user1)
+            .unwrap();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
-        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 50_000).unwrap();
-        vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
+        pool_mockup
+            .swap_usdc_for_osmo(&pool_mockup.user1, 50_000)
+            .unwrap();
+        vault_mockup
+            .withdraw(shares_got, &pool_mockup.user1)
+            .unwrap();
     }
-
 
     #[test]
     fn withdraw_without_rebalances() {
@@ -673,19 +737,32 @@ mod test {
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (10_000, 15_000);
-        vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(vault_x, vault_y, &pool_mockup.user1)
+            .unwrap();
         let vault_bals_before_withdrawal = vault_mockup.vault_balances_query();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
-        assert!(vault_mockup.withdraw(shares_got, &pool_mockup.user2).is_err());
-        vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
+        assert!(vault_mockup
+            .withdraw(shares_got, &pool_mockup.user2)
+            .is_err());
+        vault_mockup
+            .withdraw(shares_got, &pool_mockup.user1)
+            .unwrap();
         let vault_bals_after_withdrawal = vault_mockup.vault_balances_query();
 
         assert_eq!(vault_bals_before_withdrawal.bal0, Uint128::new(vault_x));
         assert_eq!(vault_bals_before_withdrawal.bal1, Uint128::new(vault_y));
-        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
-        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        assert_approx_eq!(
+            vault_bals_after_withdrawal.bal0,
+            Uint128::zero(),
+            MIN_LIQUIDITY + Uint128::one()
+        );
+        assert_approx_eq!(
+            vault_bals_after_withdrawal.bal1,
+            Uint128::zero(),
+            MIN_LIQUIDITY + Uint128::one()
+        );
     }
-
 
     #[test]
     fn withdraw_limit_without_rebalances() {
@@ -694,16 +771,27 @@ mod test {
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
         let (vault_x, vault_y) = (0, 6969);
-        vault_mockup.deposit(vault_x, vault_y, &pool_mockup.user1).unwrap();
-        
+        vault_mockup
+            .deposit(vault_x, vault_y, &pool_mockup.user1)
+            .unwrap();
+
         assert!(vault_mockup.vault_balances_query().bal0.is_zero());
-        assert_eq!(vault_mockup.vault_balances_query().bal1, Uint128::new(vault_y));
+        assert_eq!(
+            vault_mockup.vault_balances_query().bal1,
+            Uint128::new(vault_y)
+        );
 
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
-        vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .withdraw(shares_got, &pool_mockup.user1)
+            .unwrap();
 
         assert!(vault_mockup.vault_balances_query().bal0.is_zero());
-        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        assert_approx_eq!(
+            vault_mockup.vault_balances_query().bal1,
+            Uint128::zero(),
+            MIN_LIQUIDITY + Uint128::one()
+        );
     }
 
     #[test]
@@ -721,81 +809,96 @@ mod test {
                 amount1: Uint128::new(vault_y),
                 amount0_min: Uint128::new(vault_x) + Uint128::one(),
                 amount1_min: Uint128::new(vault_y) + Uint128::one(),
-                to: pool_mockup.user1.address()
+                to: pool_mockup.user1.address(),
             }),
-            &[
-                coin(vault_x, USDC_DENOM),
-                coin(vault_y, OSMO_DENOM)
-            ],
-            &pool_mockup.user1
+            &[coin(vault_x, USDC_DENOM), coin(vault_y, OSMO_DENOM)],
+            &pool_mockup.user1,
         );
         assert!(improper_deposit.is_err());
 
-        vault_mockup.wasm.execute(
-            vault_mockup.vault_addr.as_ref(),
-            &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(vault_x),
-                amount1: Uint128::new(vault_y),
-                amount0_min: Uint128::new(vault_x),
-                amount1_min: Uint128::new(vault_y),
-                to: pool_mockup.user1.address()
-            }),
-            &[
-                coin(vault_x, USDC_DENOM),
-                coin(vault_y, OSMO_DENOM)
-            ],
-            &pool_mockup.user1
-        ).unwrap();
-
+        vault_mockup
+            .wasm
+            .execute(
+                vault_mockup.vault_addr.as_ref(),
+                &ExecuteMsg::Deposit(DepositMsg {
+                    amount0: Uint128::new(vault_x),
+                    amount1: Uint128::new(vault_y),
+                    amount0_min: Uint128::new(vault_x),
+                    amount1_min: Uint128::new(vault_y),
+                    to: pool_mockup.user1.address(),
+                }),
+                &[coin(vault_x, USDC_DENOM), coin(vault_y, OSMO_DENOM)],
+                &pool_mockup.user1,
+            )
+            .unwrap();
 
         let vault_balances_before_withdrawal = vault_mockup.vault_balances_query();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user1.address());
 
         let improper_withdrawal = vault_mockup.wasm.execute(
-            vault_mockup.vault_addr.as_ref(), 
-            &ExecuteMsg::Withdraw(
-                WithdrawMsg {
-                    shares: shares_got,
-                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY,
-                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY,
-                    to: pool_mockup.user1.address()
-                }
-            ),
+            vault_mockup.vault_addr.as_ref(),
+            &ExecuteMsg::Withdraw(WithdrawMsg {
+                shares: shares_got,
+                amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY,
+                amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY,
+                to: pool_mockup.user1.address(),
+            }),
             &[],
-            &pool_mockup.user1
+            &pool_mockup.user1,
         );
         assert!(improper_withdrawal.is_err());
 
-        vault_mockup.wasm.execute(
-            vault_mockup.vault_addr.as_ref(), 
-            &ExecuteMsg::Withdraw(
-                WithdrawMsg {
+        vault_mockup
+            .wasm
+            .execute(
+                vault_mockup.vault_addr.as_ref(),
+                &ExecuteMsg::Withdraw(WithdrawMsg {
                     shares: shares_got,
-                    amount0_min: vault_balances_before_withdrawal.bal0 - MIN_LIQUIDITY - Uint128::one(),
-                    amount1_min: vault_balances_before_withdrawal.bal1 - MIN_LIQUIDITY - Uint128::one(),
-                    to: pool_mockup.user1.address()
-                }
-            ),
-            &[],
-            &pool_mockup.user1
-        ).unwrap();
+                    amount0_min: vault_balances_before_withdrawal.bal0
+                        - MIN_LIQUIDITY
+                        - Uint128::one(),
+                    amount1_min: vault_balances_before_withdrawal.bal1
+                        - MIN_LIQUIDITY
+                        - Uint128::one(),
+                    to: pool_mockup.user1.address(),
+                }),
+                &[],
+                &pool_mockup.user1,
+            )
+            .unwrap();
 
         let vault_balances_after_withdrawal = vault_mockup.vault_balances_query();
 
-        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
-        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
-        assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
-        assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
+        assert_approx_eq!(
+            vault_balances_after_withdrawal.bal0,
+            Uint128::zero(),
+            MIN_LIQUIDITY + Uint128::one()
+        );
+        assert_approx_eq!(
+            vault_balances_after_withdrawal.bal1,
+            Uint128::zero(),
+            MIN_LIQUIDITY + Uint128::one()
+        );
+        assert!(vault_balances_after_withdrawal
+            .protocol_unclaimed_fees0
+            .is_zero());
+        assert!(vault_balances_after_withdrawal
+            .protocol_unclaimed_fees1
+            .is_zero());
     }
 
     #[test]
     fn fees_withdrawals_on_rebalance() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        vault_mockup.deposit(100_000, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(100_000, 50_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
-        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 20_000).unwrap();
+        pool_mockup
+            .swap_osmo_for_usdc(&pool_mockup.user2, 20_000)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         let fees = vault_mockup.vault_fees_query();
@@ -822,11 +925,15 @@ mod test {
     fn fees_withdrawals_on_withdrawal() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        vault_mockup.deposit(100_000, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(100_000, 50_000, &pool_mockup.user1)
+            .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
 
-        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 20_000).unwrap();
+        pool_mockup
+            .swap_osmo_for_usdc(&pool_mockup.user2, 20_000)
+            .unwrap();
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
 
         let fees = vault_mockup.vault_fees_query();
@@ -851,13 +958,17 @@ mod test {
         // vault_mockup.protocol_withdraw().unwrap();
     }
 
-    #[test] 
+    #[test]
     fn cant_operate_with_no_funds() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
-        assert!(vault_mockup.withdraw(Decimal::one().atomics(), &pool_mockup.deployer).is_err());
-        assert!(vault_mockup.withdraw(Uint128::zero(), &pool_mockup.deployer).is_err());
+        assert!(vault_mockup
+            .withdraw(Decimal::one().atomics(), &pool_mockup.deployer)
+            .is_err());
+        assert!(vault_mockup
+            .withdraw(Uint128::zero(), &pool_mockup.deployer)
+            .is_err());
     }
 
     #[test]
@@ -867,28 +978,32 @@ mod test {
         let should_err = vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
             &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(50_000), amount1: Uint128::new(50_000),
-                amount0_min: Uint128::zero(), amount1_min: Uint128::zero(),
-                to: pool_mockup.user1.address()
+                amount0: Uint128::new(50_000),
+                amount1: Uint128::new(50_000),
+                amount0_min: Uint128::zero(),
+                amount1_min: Uint128::zero(),
+                to: pool_mockup.user1.address(),
             }),
             &[coin(50_000, USDC_DENOM), coin(50_001, OSMO_DENOM)],
-            &pool_mockup.user1
+            &pool_mockup.user1,
         );
 
         assert!(should_err.is_err());
-        vault_mockup.deposit(50_000, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(50_000, 50_000, &pool_mockup.user1)
+            .unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
 
         let should_err = vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
-            &ExecuteMsg::Withdraw(WithdrawMsg { 
-                shares, 
+            &ExecuteMsg::Withdraw(WithdrawMsg {
+                shares,
                 amount0_min: Uint128::zero(),
                 amount1_min: Uint128::zero(),
-                to: pool_mockup.user1.address()
+                to: pool_mockup.user1.address(),
             }),
             &[coin(1000, USDC_DENOM)],
-            &pool_mockup.user1
+            &pool_mockup.user1,
         );
         assert!(should_err.is_err());
     }
@@ -898,13 +1013,20 @@ mod test {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup
+            .deposit(10_000, 10_000, &pool_mockup.user1)
+            .unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
-        vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user1).unwrap();
+        vault_mockup
+            .withdraw(shares - Uint128::one(), &pool_mockup.user1)
+            .unwrap();
 
-        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
+        vault_mockup
+            .deposit(10_000, 10_000, &pool_mockup.user2)
+            .unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
-        vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
+        vault_mockup
+            .withdraw(shares - Uint128::one(), &pool_mockup.user2)
+            .unwrap();
     }
-
 }
