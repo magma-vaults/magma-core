@@ -691,29 +691,31 @@ mod test {
     }
 
     #[test]
+    #[test]
     fn no_limit_position_on_rebalance() {
-        // Initialize pool and vault with specific parameters
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        // Deposit amounts calculated to get balances in proportion
-        // Replace the placeholders with actual calculated values
-        let desired_amount0 = 10_000;
-        let desired_amount1 = 20_000; // Adjust as needed
+        // Calculate the proportional amounts to deposit
+        let pool_price = Decimal::from_ratio(200_000u128, 100_000u128);
+        let desired_amount0 = 10_000u128; // Arbitrary amount for token0
+        let desired_amount1 = (Uint128::from(desired_amount0) * pool_price).u128();
 
         vault_mockup
             .deposit(desired_amount0, desired_amount1, &pool_mockup.user1)
             .unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
-        // Add assertions to verify the expected outcome
-        // For example:
-        assert!(vault_mockup.vault_state_query().limit_position_id.is_none());
-        assert!(vault_mockup
-            .vault_state_query()
-            .full_range_position_id
-            .is_some());
-        assert!(vault_mockup.vault_state_query().base_position_id.is_some());
+        // Verify that no limit position was created
+        let vault_state = vault_mockup.vault_state_query();
+        assert!(vault_state.limit_position_id.is_none());
+        assert!(vault_state.full_range_position_id.is_some());
+        assert!(vault_state.base_position_id.is_some());
+
+        // Verify balances are in proportion
+        let balances = vault_mockup.vault_balances_query();
+        let actual_ratio = Decimal::from_ratio(balances.bal1, balances.bal0);
+        assert_approx_eq!(actual_ratio, pool_price, Decimal::percent(1)); // Allow 1% tolerance
     }
 
     #[test]
