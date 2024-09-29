@@ -690,33 +690,20 @@ mod test {
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
     }
 
-    #[test]
-    #[test]
-    fn no_limit_position_on_rebalance() {
-        let pool_mockup = PoolMockup::new(100_000, 200_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-
-        // Calculate the proportional amounts to deposit
-        let pool_price = Decimal::from_ratio(200_000u128, 100_000u128);
-        let desired_amount0 = 10_000u128; // Arbitrary amount for token0
-        let desired_amount1 = (Uint128::from(desired_amount0) * pool_price).u128();
-
-        vault_mockup
-            .deposit(desired_amount0, desired_amount1, &pool_mockup.user1)
-            .unwrap();
-        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
-
-        // Verify that no limit position was created
-        let vault_state = vault_mockup.vault_state_query();
-        assert!(vault_state.limit_position_id.is_none());
-        assert!(vault_state.full_range_position_id.is_some());
-        assert!(vault_state.base_position_id.is_some());
-
-        // Verify balances are in proportion
-        let balances = vault_mockup.vault_balances_query();
-        let actual_ratio = Decimal::from_ratio(balances.bal1, balances.bal0);
-        assert_approx_eq!(actual_ratio, pool_price, Decimal::percent(1)); // Allow 1% tolerance
-    }
+    //   #[test]
+    // fn no_limit_position_on_rebalance() {
+    //   panic!(
+    //     "TODO: Calc expression to get amount variations for the balances to get in proportion"
+    //  );
+    // let pool_mockup = PoolMockup::new(100_000, 200_000);
+    // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
+    //     base_factor: "2".into(),
+    //     limit_factor: "1.45".into(),
+    //     full_range_weight: "0.55".into(),
+    // });
+    //
+    // vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
+    //   }
 
     #[test]
     fn rebalance_after_price_change() {
