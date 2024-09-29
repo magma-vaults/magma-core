@@ -119,7 +119,7 @@ pub fn position_balances_with_fees(
 
     // Invariant: Will never panic, because if the position has amounts
     //            `amount0` and `amount1`, we know theyre valid `Uint128`s.
-    // NOTE: We subtract 1 to prevent dust error durign withdrawals, as 
+    // NOTE: We subtract 1 to prevent dust error during withdrawals, as 
     //       position withdrawals can leave 1 atomic token behind.
     let bal0 = Uint128::from_str(&asset0.amount)
         .unwrap()

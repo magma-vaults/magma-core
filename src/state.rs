@@ -4,12 +4,8 @@ use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
-use anyhow::Error;
-
 use readonly;
-
 use crate::constants::{MAX_PROTOCOL_FEE, MAX_TICK};
-use crate::do_ok;
 use crate::error::InstantiationError;
 use crate::{
     constants::MIN_TICK,
@@ -95,11 +91,10 @@ impl PoolId {
         let querier = PoolmanagerQuerier::new(querier);
         // Invariant: We already verified that the id refers to a valid pool the
         //            moment we constructed `self`.
-        do_ok!(querier
-            .pool(self.0)?
-            .pool.ok_or(Error::msg("impossible"))?
-            .try_into().unwrap() // FIXME Why cant I `?`?
-        ).unwrap()
+        querier
+            .pool(self.0).unwrap()
+            .pool.unwrap()
+            .try_into().unwrap()
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
@@ -150,18 +145,18 @@ impl Default for ProtocolFee {
 
 #[cw_serde]
 pub struct VaultParameters {
-    // Price factor for the base order. Thus, if the current price is `p`,
-    // then the base position will have range `[p/base_factor, p*base_factor]`.
-    // if `base_factor == PriceFactor(Decimal::one())`, then the vault wont
-    // have a base order.
+    /// Price factor for the base order. Thus, if the current price is `p`,
+    /// then the base position will have range `[p/base_factor, p*base_factor]`.
+    /// if `base_factor == PriceFactor(Decimal::one())`, then the vault wont
+    /// have a base order.
     pub base_factor: PriceFactor,
-    // Price factor for the limit order. Thus, if the current price is `p`,
-    // then the limit position will have either range `[p/limit_factor, p]` or
-    // `[p, p*limit_factor]`. If `limit_factor == PriceFactor(Decimal::one())`,
-    // then the vault wont have aa limit order, and will just hold remaining
-    // tokens.
+    /// Price factor for the limit order. Thus, if the current price is `p`,
+    /// then the limit position will have either range `[p/limit_factor, p]` or
+    /// `[p, p*limit_factor]`. If `limit_factor == PriceFactor(Decimal::one())`,
+    /// then the vault wont have aa limit order, and will just hold remaining
+    /// tokens.
     pub limit_factor: PriceFactor,
-    // Decimal weight, zero if we dont want a full range position.
+    /// Decimal weight, zero if we dont want a full range position.
     pub full_range_weight: Weight,
 }
 
@@ -209,7 +204,7 @@ impl VaultParameters {
                 })
             }
             _ => Err(ContradictoryConfig {
-                reason: "We dont support vaults with less than 3 positions or now".into()
+                reason: "We dont support vaults with less than 3 positions for now".into()
             }),
         }?;
 
@@ -279,36 +274,61 @@ impl VaultInfo {
     }
 
     pub fn current_tick(&self, querier: &QuerierWrapper) -> i32 {
-        // TODO Prove and use safe conversions.
-        self.pool(querier).current_tick as i32
+        // Invariant: Wont panic as max and min possible ticks below 2**31 - 1.
+        self.pool(querier).current_tick.try_into().unwrap()
     }
 
     pub fn tick_spacing(&self, querier: &QuerierWrapper) -> i32 {
-        // TODO: Use safe conversions.
-        // Invariant: Wont overflow under reasonable conditions.
-        self.pool(querier).tick_spacing as i32
+        // Invariant: Wont panic as max and min possible ticks below 2**31 - 1.
+        self.pool(querier).tick_spacing.try_into().unwrap()
     }
 
     /// Min possible tick taking into account the pool tick spacing.
     pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
         // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
-        ((MIN_TICK + spacing + 1) / spacing) * spacing
+
+        // Invariant: Wont panic.
+        // Proof: Division wont fail, as `spacing` is always positive.
+        //        Additions wont overflow, even for unreasonable tick
+        //        spacings. Multiplication by spacing wont overflow,
+        //        as we just divided by it.
+        MIN_TICK
+            .checked_add(spacing)
+            .and_then(|x| x.checked_add(1))
+            .and_then(|x| x.checked_div(spacing))
+            .and_then(|x| x.checked_mul(spacing))
+            .unwrap()
     }
 
     /// Max possible tick taking into account the pool tick spacing.
     pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        (MAX_TICK / spacing) * spacing
+        // Invariant: Wont panic, as `spacing` is always positive.
+        MAX_TICK
+            .checked_div(spacing)
+            .and_then(|x| x.checked_mul(spacing))
+            .unwrap()
     }
 
-    // TODO Unsafe operations to prove here. TODO Prove function semantics.
+    // TODO: Document and lift to `i64`, as those computations could panic
+    //       under unreasonable input values. I dont care for that for now,
+    //       I'll just assume `value` is reasonable for now.
     pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        let lower = (value / spacing) * spacing;
-        // Invariant: Wont overflow because `i32::MAX <<< i64::MAX`
-        let upper = (value / spacing + 1) * spacing;
-        let closest = min_by_key(lower, upper, |x| (x - value).abs());
+
+        let lower = value
+            .checked_div(spacing)
+            .and_then(|x| x.checked_mul(spacing))
+            .unwrap();
+
+        let upper = value
+            .checked_div(spacing)
+            .and_then(|x| x.checked_add(1))
+            .and_then(|x| x.checked_mul(spacing))
+            .unwrap();
+
+        let closest = min_by_key(lower, upper, |x| (x.checked_sub(value).unwrap()).abs());
 
         if closest < MIN_TICK {
             self.min_valid_tick(querier)

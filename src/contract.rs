@@ -463,8 +463,6 @@ mod test {
     }
 
 
-
-
     #[test]
     fn price_function_inv_test() {
         let prices = &[
