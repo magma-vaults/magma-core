@@ -13,7 +13,7 @@ cw-storage-plus = "1.2.0"
 thiserror = "1"
 
 # schemars = "0.8.20"
-cosmwasm-schema = "1.5.7"
+cosmwasm-schema = "2.1.4"
 osmosis-std = "0.25.0"
 cw-utils = "1.0.3"
 
