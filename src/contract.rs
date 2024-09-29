@@ -690,21 +690,6 @@ mod test {
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
     }
 
-    //   #[test]
-    // fn no_limit_position_on_rebalance() {
-    //   panic!(
-    //     "TODO: Calc expression to get amount variations for the balances to get in proportion"
-    //  );
-    // let pool_mockup = PoolMockup::new(100_000, 200_000);
-    // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-    //     base_factor: "2".into(),
-    //     limit_factor: "1.45".into(),
-    //     full_range_weight: "0.55".into(),
-    // });
-    //
-    // vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
-    //   }
-
     #[test]
     fn rebalance_after_price_change() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
