@@ -7,13 +7,13 @@ edition = "2021"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-cosmwasm-std = { version = "1.5.7", features = [] }
+cosmwasm-std = { version = "1.5.8", features = [] }
 serde = { version = "1.0.202", default-features = false, features = ["derive"] }
 cw-storage-plus = "1.2.0"
 thiserror = "1"
 
 # schemars = "0.8.20"
-cosmwasm-schema = "1.5.7"
+cosmwasm-schema = "1.5.8"
 osmosis-std = "0.25.0"
 cw-utils = "1.0.3"
 
