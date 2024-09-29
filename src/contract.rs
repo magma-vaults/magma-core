@@ -691,6 +691,45 @@ mod test {
     }
 
     #[test]
+    fn transition_from_limit_to_no_limit_position() {
+        let pool_mockup = PoolMockup::new(100_000, 200_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
+        // Step 1: Deposit tokens out of proportion
+        vault_mockup.deposit(20_000, 0, &pool_mockup.user1).unwrap();
+
+        // Step 2: Rebalance
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        // Verify that a limit position was created
+        let initial_state = vault_mockup.vault_state_query();
+        assert!(initial_state.limit_position_id.is_some());
+
+        // Step 3: Sell some tokens to the pool so the vault reserves get in proportion
+        let vault_balances = vault_mockup.vault_balances_query();
+        let pool_price = Decimal::from_ratio(200_000u128, 100_000u128);
+        let osmo_to_sell = vault_balances.bal0 * pool_price - vault_balances.bal1;
+
+        pool_mockup
+            .swap_usdc_for_osmo(&pool_mockup.deployer, osmo_to_sell.u128())
+            .unwrap();
+
+        // Step 4: Rebalance
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        // Step 5: Verify that the vault doesn't have a limit position after rebalance
+        let final_state = vault_mockup.vault_state_query();
+        assert!(final_state.limit_position_id.is_none());
+        assert!(final_state.full_range_position_id.is_some());
+        assert!(final_state.base_position_id.is_some());
+
+        // Verify that the vault balances are now proportional to the pool price
+        let final_balances = vault_mockup.vault_balances_query();
+        let actual_ratio = Decimal::from_ratio(final_balances.bal1, final_balances.bal0);
+        assert_approx_eq!(actual_ratio, pool_price, Decimal::percent(1));
+    }
+
+    #[test]
     fn rebalance_after_price_change() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
