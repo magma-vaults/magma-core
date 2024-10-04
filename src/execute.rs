@@ -1,20 +1,15 @@
 use std::str::FromStr;
 
-use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, Event, MessageInfo, Response, StdResult, SubMsg, Uint128};
+use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_token_info}, state::TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
 use crate::{
-    constants::{MIN_LIQUIDITY, PROTOCOL},
-    error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError},
-    msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg},
-    query,
-    state::{
+    constants::{MIN_LIQUIDITY, PROTOCOL}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{
         FundsInfo, PositionType, StateSnapshot,
         VaultParameters, VaultRebalancer, VaultState,
         Weight, FEES_INFO, FUNDS_INFO,
-        VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE},
-    utils::{calc_x0, price_function_inv, raw}};
+        VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{calc_x0, price_function_inv, raw}};
 
 pub fn deposit(
     DepositMsg {
@@ -166,8 +161,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         full_range_weight,
     } = VAULT_PARAMETERS.load(deps.storage).unwrap();
 
-    let mut events: Vec<Event> = vec![];
-
     let VaultBalancesResponse { 
         bal0,
         bal1,
@@ -177,23 +170,13 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         admin_unclaimed_fees1
     } = query::vault_balances(deps);
 
-    events.push(
-        Event::new("vault_balances_snapshot")
-            .add_attribute("balance0", bal0)
-            .add_attribute("balance1", bal1),
-    );
-
     if bal0.is_zero() && bal1.is_zero() {
         return Err(NothingToRebalance {});
     }
 
-    events.push(
-        Event::new("vault_pool_price_snapshot").add_attribute("price", price.to_string()),
-    );
-
     if price.is_zero() {
-        // TODO: If the pool has no price, we should be able to deposit in any proportion.
-        // But we dont support that for now.
+        // TODO: If the pool has no price, we should be able to deposit 
+        //       in any proportion. But we dont support that for now.
         return Err(PoolWithoutPrice(pool_id.0));
     }
 
@@ -296,15 +279,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         let lower_tick = vault_info.min_valid_tick(&deps.querier);
         let upper_tick = vault_info.max_valid_tick(&deps.querier);
 
-        events.push(
-            Event::new("create_vault_position")
-                .add_attribute("position_type", "full_range")
-                .add_attribute("lower_tick", lower_tick.to_string())
-                .add_attribute("upper_tick", upper_tick.to_string())
-                .add_attribute("amount0", full_range_balance0.to_string())
-                .add_attribute("amount1", full_range_balance1.to_string()),
-        );
-
         new_position_msgs.push(SubMsg::reply_on_success(
             create_position_msg(
                 lower_tick,
@@ -327,15 +301,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
 
         let lower_tick = price_function_inv(&lower_price);
         let upper_tick = price_function_inv(&upper_price);
-
-        events.push(
-            Event::new("create_vault_position")
-                .add_attribute("position_type", "base")
-                .add_attribute("lower_tick", lower_tick.to_string())
-                .add_attribute("upper_tick", upper_tick.to_string())
-                .add_attribute("amount0", base_range_balance0.to_string())
-                .add_attribute("amount1", base_range_balance1.to_string()),
-        );
 
         new_position_msgs.push(SubMsg::reply_on_success(
             create_position_msg(
@@ -363,15 +328,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
                 .checked_sub(vault_info.tick_spacing(&deps.querier))
                 .unwrap();
 
-            events.push(
-                Event::new("create_vault_position")
-                    .add_attribute("position_type", "limit")
-                    .add_attribute("lower_tick", lower_tick.to_string())
-                    .add_attribute("upper_tick", upper_tick.to_string())
-                    .add_attribute("amount0", limit_balance0.to_string())
-                    .add_attribute("amount1", limit_balance1.to_string()),
-            );
-
             new_position_msgs.push(SubMsg::reply_on_success(
                 create_position_msg(
                     lower_tick,
@@ -393,15 +349,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
                 .current_tick(&deps.querier)
                 .checked_add(vault_info.tick_spacing(&deps.querier))
                 .unwrap();
-
-            events.push(
-                Event::new("create_vault_position")
-                    .add_attribute("position_type", "limit")
-                    .add_attribute("lower_tick", lower_tick.to_string())
-                    .add_attribute("upper_tick", upper_tick.to_string())
-                    .add_attribute("amount0", limit_balance0.to_string())
-                    .add_attribute("amount1", limit_balance1.to_string()),
-            );
 
             new_position_msgs.push(SubMsg::reply_on_success(
                 create_position_msg(
@@ -462,7 +409,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     };
 
     Ok(Response::new()
-        .add_events(events)
         .add_message(rewards_claim_msg)
         .add_messages(liquidity_removal_msgs)
         .add_submessages(new_position_msgs)
@@ -472,6 +418,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
 fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), RebalanceError> {
     use RebalanceError::*;
     
+    // Invariant: Any state is always present after instantition.
     let vault_info = VAULT_INFO.load(deps.storage).unwrap();
     let vault_state = VAULT_STATE.load(deps.storage).unwrap();
     let price = vault_info.pool_id.price(&deps.querier);
@@ -553,14 +500,12 @@ pub fn remove_liquidity_msg(
 
     // Invariant: We know that if `position_id` is in the state, then
     //            it refers to a valid `FullPositionBreakdown`.
-    let position_liquidity = PositionByIdRequest { position_id }
-        .query(&deps.querier)
-        .unwrap()
-        .position
-        .unwrap()
-        .position
-        .unwrap()
-        .liquidity;
+    let position_liquidity = do_some!(PositionByIdRequest { position_id }
+        .query(&deps.querier).ok()?
+        .position?
+        .position?
+        .liquidity
+    ).unwrap();
 
     // Invariant: We know any position liquidity is a valid Decimal.
     let position_liquidity = liquidity_proportion
@@ -590,14 +535,8 @@ pub fn create_position_msg(
     let pool = vault_info.pool(&deps.querier);
 
     let tokens_provided = vec![
-        Coin {
-            denom: pool.token0.clone(),
-            amount: raw(&tokens_provided0),
-        },
-        Coin {
-            denom: pool.token1.clone(),
-            amount: raw(&tokens_provided1),
-        },
+        Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
+        Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) },
     ]
     .into_iter()
     .filter(|c| c.amount != "0")

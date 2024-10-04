@@ -2,13 +2,22 @@ use std::str::FromStr;
 use cosmwasm_std::{Decimal, Decimal256, Int128, SignedDecimal256, Uint128};
 use crate::state::{PositiveDecimal, PriceFactor, Weight};
 
-/// Used to chain anyhow::Result computations 
-/// without closure boilerplate.
+/// Used to chain anyhow::Result computations without closure boilerplate.
 #[macro_export]
 macro_rules! do_ok {
     ($($code:tt)*) => {
         (|| -> ::anyhow::Result<_> {
             Ok($($code)*)
+        })()
+    }
+}
+
+/// Used to chain Optional computations without closure boilerplate.
+#[macro_export]
+macro_rules! do_some {
+    ($($code:tt)*) => {
+        (|| -> Option<_> {
+            Some($($code)*)
         })()
     }
 }
