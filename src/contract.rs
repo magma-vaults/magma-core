@@ -25,14 +25,10 @@ pub fn instantiate(
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
 
-    if !info.funds.is_empty() {
-        return Err(ContractError::NonPayable("instantiate".into()))
-    }
-
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
-    let protocol_info = FeesInfo::new(msg.vault_parameters.admin_fee, &vault_info)?;
+    let fees_info = FeesInfo::new(msg.vault_parameters.admin_fee, &vault_info, &info)?;
     let funds_info = FundsInfo::default();
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
@@ -51,7 +47,7 @@ pub fn instantiate(
         VAULT_INFO.save(deps.storage, &vault_info)?;
         VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
         VAULT_STATE.save(deps.storage, &vault_state)?;
-        FEES_INFO.save(deps.storage, &protocol_info)?;
+        FEES_INFO.save(deps.storage, &fees_info)?;
         FUNDS_INFO.save(deps.storage, &funds_info)?;
         TOKEN_INFO.save(deps.storage, &token_info)?;
     }.unwrap();

@@ -1,11 +1,11 @@
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, QuerierWrapper, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, MessageInfo, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
 use readonly;
-use crate::constants::{MAX_PROTOCOL_FEE, MAX_TICK};
+use crate::constants::{MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM};
 use crate::error::InstantiationError;
 use crate::{
     constants::MIN_TICK,
@@ -138,8 +138,27 @@ impl ProtocolFee {
 
 impl Default for ProtocolFee {
     fn default() -> Self {
-        // Invariant: Wont panic, `ProtocolFee::MAX` is 0.1, 
+        // Invariant: Wont panic, `Self::max()` is 0.1, 
         Self::new("0.05").unwrap()
+    } 
+}
+
+#[cw_serde]
+#[readonly::make]
+pub struct VaultCreationCost(pub Uint128);
+impl VaultCreationCost {
+    pub fn max() -> Uint128 { MAX_VAULT_CREATION_COST }
+
+    pub fn new(value: Uint128) -> Option<Self> {
+        (value <= Self::max()).then_some(Self(value))
+    }
+}
+
+impl Default for VaultCreationCost {
+    fn default() -> Self {
+        // Invariant: Wont panic, `Self::max()` is 20_000_000.
+        // FIXME: Really low default for testing purposes.
+        Self::new(Uint128::new(1_000)).unwrap()
     } 
 }
 
@@ -426,13 +445,33 @@ pub struct FeesInfo {
     pub protocol_fee: ProtocolFee,
     pub protocol_tokens0_owned: Uint128,
     pub protocol_tokens1_owned: Uint128,
+    pub protocol_vault_creation_cost: VaultCreationCost,
+    pub protocol_vault_creation_tokens_owned: Uint128,
     pub admin_fee: ProtocolFee,
     pub admin_tokens0_owned: Uint128,
     pub admin_tokens1_owned: Uint128,
 }
 
 impl FeesInfo {
-    pub fn new(admin_fee: String, vault_info: &VaultInfo) -> Result<FeesInfo, InstantiationError> {
+    pub fn new(
+        admin_fee: String,
+        vault_info: &VaultInfo,
+        info: &MessageInfo
+    ) -> Result<FeesInfo, InstantiationError> {
+
+        let vault_creation_cost = VaultCreationCost::default();
+
+        let paid_amount = cw_utils::must_pay(info, VAULT_CREATION_COST_DENOM)
+            .unwrap_or_default();
+
+        if paid_amount != vault_creation_cost.0 {
+            return Err(InstantiationError::VaultCreationCostNotPaid { 
+                cost: vault_creation_cost.0.into(),
+                denom: VAULT_CREATION_COST_DENOM.into(),
+                got:  paid_amount.into()
+            })
+        }
+
         let admin_fee = ProtocolFee::new(&admin_fee)
             .ok_or(InstantiationError::InvalidAdminFee {
                 max: ProtocolFee::max().to_string(),
@@ -442,7 +481,11 @@ impl FeesInfo {
         if !admin_fee.0.is_zero() && vault_info.admin.is_none() {
             Err(InstantiationError::AdminFeeWithoutAdmin {})
         } else {
-            Ok(FeesInfo { admin_fee, ..FeesInfo::default() })
+            Ok(FeesInfo { 
+                admin_fee,
+                protocol_vault_creation_tokens_owned: paid_amount,
+                ..FeesInfo::default() 
+            })
         }
     }
 }

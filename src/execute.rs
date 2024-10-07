@@ -5,7 +5,7 @@ use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_toke
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
 use crate::{
-    constants::{MIN_LIQUIDITY, PROTOCOL}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{
+    constants::{MIN_LIQUIDITY, PROTOCOL, VAULT_CREATION_COST_DENOM}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, WithdrawMsg}, query, state::{
         FundsInfo, PositionType, StateSnapshot,
         VaultParameters, VaultRebalancer, VaultState,
         Weight, FEES_INFO, FUNDS_INFO,
@@ -717,12 +717,14 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
         to_address: PROTOCOL.to_string(),
         amount: vec![
             coin(fees.protocol_tokens0_owned.into(), denom0),
-            coin(fees.protocol_tokens1_owned.into(), denom1)
+            coin(fees.protocol_tokens1_owned.into(), denom1),
+            coin(fees.protocol_vault_creation_tokens_owned.into(), VAULT_CREATION_COST_DENOM)
         ] 
     };
 
     fees.protocol_tokens0_owned = Uint128::zero();
     fees.protocol_tokens1_owned = Uint128::zero();
+    fees.protocol_vault_creation_tokens_owned = Uint128::zero();
 
     // Invariant: Will serialize as all types are proper.
     FEES_INFO.save(deps.storage, &fees).unwrap();

@@ -26,6 +26,9 @@ pub enum ContractError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum InstantiationError {
+    #[error("Vault creation costs {cost} of token {denom}, got: {got}")]
+    VaultCreationCostNotPaid { cost: String, denom: String, got: String },
+
     #[error("Invalid concentrated liquidity pool_id {0}")]
     InvalidPoolId(u64),
 
