@@ -126,7 +126,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee}, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
@@ -137,7 +137,7 @@ mod test {
     ;
     use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
-    const USDC_DENOM: &str = "ibc/DE6792CF9E521F6AD6E9A4BDF6225C9571A3B74ACC0A529F92BC5122A39D2E58";
+    const USDC_DENOM: &str = VAULT_CREATION_COST_DENOM;
     const OSMO_DENOM: &str = "uosmo";
 
     struct PoolMockup {
@@ -305,6 +305,7 @@ mod test {
             let code_id = store_vaults_code(&wasm, &pool_info.deployer);
             let api = mock_dependencies().api;
 
+            let usdc_fee = Coin::new(VaultCreationCost::default().0.into(), USDC_DENOM);
             let vault_addr = wasm
                 .instantiate(
                     code_id,
@@ -320,7 +321,7 @@ mod test {
                     },
                     None,
                     Some("my vault"),
-                    &[],
+                    &[usdc_fee],
                     &pool_info.deployer,
                 )
                 .unwrap()
@@ -622,7 +623,7 @@ mod test {
 
     #[test]
     fn no_limit_position_on_rebalance() {
-        panic!("TODO: Calc expression to get amount variations for the balances to get in proportion");
+        panic!("TODO: Calc expression to get amount variations for the balances to get in proportion (see issue #18)");
         // let pool_mockup = PoolMockup::new(100_000, 200_000);
         // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
         //     base_factor: "2".into(),
