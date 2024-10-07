@@ -101,7 +101,7 @@ pub fn execute(
         WithdrawAdminFees {} => Ok(execute::withdraw_admin_fees(deps, info)?),
         ChangeVaultInfo(new_vault_info) => Ok(execute::change_vault_info(new_vault_info, deps, info)?),
         ChangeVaultParameters(new_vault_parameters) => Ok(execute::change_vault_parameters(new_vault_parameters, deps, info)?),
-        ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps)?)
+        ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps, info)?)
     }
 }
 
@@ -409,10 +409,22 @@ mod test {
         fn admin_withdraw(
             &self,
             from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>>{
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
                 self.vault_addr.as_ref()   ,
                 &ExecuteMsg::WithdrawAdminFees {},
+                &[],
+                from
+            )?)
+        }
+
+        fn protocol_withdraw(
+            &self,
+            from: &SigningAccount
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref()   ,
+                &ExecuteMsg::WithdrawProtocolFees {},
                 &[],
                 from
             )?)
@@ -794,6 +806,7 @@ mod test {
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user1).is_err());
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user2).is_err());
         vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+        vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
 
         let fees = vault_mockup.vault_fees_query();
         assert!(fees.admin_tokens0_owned.is_zero());
@@ -825,6 +838,7 @@ mod test {
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user1).is_err());
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user2).is_err());
         let x = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+        let _y = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
         println!("{:?}", x);
         // TODO Check if the transaction indeed sends some tokens back.
 
@@ -892,11 +906,6 @@ mod test {
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
-    }
-
-    #[test]
-    fn test_protocol_fees_withdrawal() {
-        panic!("TODO") 
     }
 
 }

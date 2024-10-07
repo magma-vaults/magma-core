@@ -6,7 +6,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpre
 
 use crate::{
     constants::{MIN_LIQUIDITY, PROTOCOL, VAULT_CREATION_COST_DENOM}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, WithdrawMsg}, query, state::{
-        FundsInfo, PositionType, StateSnapshot, VaultInfo, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{calc_x0, price_function_inv, raw}};
+        FundsInfo, PositionType, ProtocolFee, StateSnapshot, VaultInfo, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{calc_x0, price_function_inv, raw}};
 
 pub fn deposit(
     DepositMsg {
@@ -707,7 +707,9 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
     let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
     
     if *PROTOCOL != info.sender {
-        return Err(ProtocolOperationError::UnauthorizedProtocolAccount {})
+        return Err(ProtocolOperationError::UnauthorizedProtocolAccount(
+            "withdraw_protocol_fees".into()
+        ))
     }
 
     let tx = BankMsg::Send { 
@@ -716,7 +718,7 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
             coin(fees.protocol_tokens0_owned.into(), denom0),
             coin(fees.protocol_tokens1_owned.into(), denom1),
             coin(fees.protocol_vault_creation_tokens_owned.into(), VAULT_CREATION_COST_DENOM)
-        ] 
+        ].into_iter().filter(|c| !c.amount.is_zero()).collect() 
     };
 
     fees.protocol_tokens0_owned = Uint128::zero();
@@ -747,7 +749,7 @@ pub fn withdraw_admin_fees(deps: DepsMut, info: MessageInfo) -> Result<Response,
         amount: vec![
             coin(fees.admin_tokens0_owned.into(), denom0),
             coin(fees.admin_tokens1_owned.into(), denom1)
-        ] 
+        ].into_iter().filter(|c| !c.amount.is_zero()).collect() 
     };
 
     fees.admin_tokens0_owned = Uint128::zero();
@@ -789,6 +791,19 @@ pub fn change_vault_info(
 
     let new_vault_info = VaultInfo::new(new_vault_info, deps.as_ref())?;
 
+    if new_vault_info.admin.is_none() {
+        // Invariant: Any state is present after instantiation.
+        let mut fees_info = FEES_INFO.load(deps.storage).unwrap();
+        if !fees_info.admin_tokens0_owned.is_zero() || !fees_info.admin_tokens1_owned.is_zero() {
+            return Err(RemovingAdminWithUncollectedAdminFees())
+        }
+
+        fees_info.admin_fee = ProtocolFee::zero();
+
+        // Invariant: Wont panic as we ensured all types are proper during development.
+        FEES_INFO.save(deps.storage, &fees_info).unwrap();
+    }
+
     // Invariant: Wont panic as we ensured all types are proper during development.
     VAULT_INFO.save(deps.storage, &new_vault_info).unwrap();
     Ok(Response::new())
@@ -801,13 +816,13 @@ pub fn change_vault_parameters(
 ) -> Result<Response, AdminOperationError> {
     use AdminOperationError::*;
     // Invariant: Any state is present after instantiation.
-    let current_vault_info = VAULT_INFO.load(deps.storage).unwrap();
+    let vault_info = VAULT_INFO.load(deps.storage).unwrap();
 
-    let admin = current_vault_info.admin.clone()
+    let admin = vault_info.admin.clone()
         .ok_or(NonExistantAdmin("change_vault_parameters".into()))?;
 
     if info.sender != admin {
-        return Err(UnauthorizedAdminAccount("change_vault_info".into()))
+        return Err(UnauthorizedAdminAccount("change_vault_parameters".into()))
     }
 
     let new_vault_parameters = VaultParameters::new(new_vault_parameters)?;
@@ -819,13 +834,45 @@ pub fn change_vault_parameters(
 
 pub fn change_admin_fee(
     new_admin_fee: String,
-    deps: DepsMut
+    deps: DepsMut,
+    info: MessageInfo
 ) -> Result<Response, AdminOperationError> {
+    use AdminOperationError::*;
     // Invariant: Any state is present after instantiation.
+    let vault_info = VAULT_INFO.load(deps.storage).unwrap();
     let fees_info = FEES_INFO.load(deps.storage).unwrap();
-    let new_fees_info = fees_info.update(new_admin_fee, deps.as_ref())?;
+
+    let admin = vault_info.admin.clone()
+        .ok_or(NonExistantAdmin("change_admin_fee".into()))?;
+
+    if info.sender != admin {
+        return Err(UnauthorizedAdminAccount("change_admin_fee".into()))
+    }
+
+    let new_fees_info = fees_info.update_admin_fee(new_admin_fee, deps.as_ref())?;
     // Invariant: Wont panic as we ensured all types are proper during development.
     FEES_INFO.save(deps.storage, &new_fees_info).unwrap();
 
     Ok(Response::new())
 }
+
+pub fn change_protocol_fee(
+    new_protocol_fee: String,
+    deps: DepsMut,
+    info: MessageInfo
+) -> Result<Response, ProtocolOperationError> {
+    // Invariant: Any state is present after instantiation.
+    let fees_info = FEES_INFO.load(deps.storage).unwrap();
+
+    if *PROTOCOL != info.sender {
+        return Err(ProtocolOperationError::UnauthorizedProtocolAccount(
+            "withdraw_protocol_fees".into()
+        ))
+    }
+
+    let new_fees_info = fees_info.update_protocol_fee(new_protocol_fee)?;
+    // Invariant: Wont panic as we ensured all types are proper during development.
+    FEES_INFO.save(deps.storage, &new_fees_info).unwrap();
+    Ok(Response::new())
+}
+

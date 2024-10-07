@@ -1,7 +1,7 @@
 use crate::constants::{
     MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM,
 };
-use crate::error::InstantiationError;
+use crate::error::{InstantiationError, ProtocolOperationError};
 use crate::{
     constants::MIN_TICK,
     msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
@@ -33,6 +33,10 @@ impl Weight {
 
     pub fn mul_raw(&self, value: Uint128) -> Decimal {
         self.mul_dec(&Decimal::raw(value.into()))
+    }
+
+    pub fn zero() -> Self {
+        Self(Decimal::zero())
     }
 
     pub fn max() -> Self {
@@ -143,6 +147,10 @@ impl ProtocolFee {
     pub fn new(value: &str) -> Option<Self> {
         let value = Weight::new(value)?;
         (value.0 <= Self::max()).then_some(Self(value))
+    }
+
+    pub fn zero() -> ProtocolFee {
+        Self(Weight::zero())
     }
 }
 
@@ -508,11 +516,21 @@ impl FeesInfo {
         })
     }
 
-    pub fn update(&self, admin_fee: String, deps: Deps) -> Result<FeesInfo, InstantiationError> {
+    pub fn update_admin_fee(&self, admin_fee: String, deps: Deps) -> Result<FeesInfo, InstantiationError> {
         // Invariant: Any state is present after instantitation.
         let vault_info = VAULT_INFO.load(deps.storage).unwrap();
         let admin_fee = Self::validate_admin_fee(admin_fee, &vault_info)?;
         Ok(FeesInfo { admin_fee, ..self.clone() })
+    }
+
+    pub fn update_protocol_fee(&self, protocol_fee: String) -> Result<FeesInfo, ProtocolOperationError> {
+        let protocol_fee = 
+            ProtocolFee::new(&protocol_fee).ok_or(ProtocolOperationError::InvalidProtocolFee { 
+                max: (*MAX_PROTOCOL_FEE).to_string(), 
+                got: protocol_fee
+            })?;
+
+        Ok(FeesInfo { protocol_fee, ..self.clone() })
     }
 }
 

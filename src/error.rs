@@ -120,13 +120,15 @@ pub enum WithdrawalError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ProtocolOperationError {
-    #[error("Cant claim protocol fees from non protocol account")]
-    UnauthorizedProtocolAccount { },
+    #[error("Cant do protocol operation \"{0}\" from non protocol account")]
+    UnauthorizedProtocolAccount(String),
+
+    #[error("Invalid protocol fee: max: {max}; got: {got}")]
+    InvalidProtocolFee { max: String, got: String },
 }
 
 #[derive(Error, Debug, PartialEq)]
 pub enum AdminOperationError {
-    // TODO Generalize.
     #[error("Cant do admin operation \"{0}\" from non admin account")]
     UnauthorizedAdminAccount(String),
 
@@ -140,5 +142,8 @@ pub enum AdminOperationError {
     //        Properly structure instantiation errors to prevent this.
     #[error("Tried to improperly reinstantiate state: {0}")]
     ReInstantiation(#[from] InstantiationError),
+
+    #[error("Tried to remove admin, but there are still uncollected admin fees")]
+    RemovingAdminWithUncollectedAdminFees()
 }
 
