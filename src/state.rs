@@ -1,3 +1,11 @@
+use crate::constants::{
+    MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM,
+};
+use crate::error::InstantiationError;
+use crate::{
+    constants::MIN_TICK,
+    msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
+};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Decimal, Deps, MessageInfo, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
@@ -5,12 +13,6 @@ use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
 use readonly;
-use crate::constants::{MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM};
-use crate::error::InstantiationError;
-use crate::{
-    constants::MIN_TICK,
-    msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
-};
 use std::{cmp::min_by_key, str::FromStr};
 
 #[cw_serde]
@@ -49,8 +51,11 @@ impl Weight {
 impl TryFrom<Decimal> for Weight {
     type Error = ();
     fn try_from(value: Decimal) -> Result<Self, Self::Error> {
-        if value > Self::MAX { Err(()) } 
-        else { Ok(Self(value)) }
+        if value > Self::MAX {
+            Err(())
+        } else {
+            Ok(Self(value))
+        }
     }
 }
 
@@ -92,9 +97,12 @@ impl PoolId {
         // Invariant: We already verified that the id refers to a valid pool the
         //            moment we constructed `self`.
         querier
-            .pool(self.0).unwrap()
-            .pool.unwrap()
-            .try_into().unwrap()
+            .pool(self.0)
+            .unwrap()
+            .pool
+            .unwrap()
+            .try_into()
+            .unwrap()
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
@@ -128,7 +136,9 @@ impl PriceFactor {
 #[readonly::make]
 pub struct ProtocolFee(pub Weight);
 impl ProtocolFee {
-    pub fn max() -> Decimal { *MAX_PROTOCOL_FEE }
+    pub fn max() -> Decimal {
+        *MAX_PROTOCOL_FEE
+    }
 
     pub fn new(value: &str) -> Option<Self> {
         let value = Weight::new(value)?;
@@ -138,16 +148,18 @@ impl ProtocolFee {
 
 impl Default for ProtocolFee {
     fn default() -> Self {
-        // Invariant: Wont panic, `Self::max()` is 0.1, 
+        // Invariant: Wont panic, `Self::max()` is 0.1,
         Self::new("0.05").unwrap()
-    } 
+    }
 }
 
 #[cw_serde]
 #[readonly::make]
 pub struct VaultCreationCost(pub Uint128);
 impl VaultCreationCost {
-    pub fn max() -> Uint128 { MAX_VAULT_CREATION_COST }
+    pub fn max() -> Uint128 {
+        MAX_VAULT_CREATION_COST
+    }
 
     pub fn new(value: Uint128) -> Option<Self> {
         (value <= Self::max()).then_some(Self(value))
@@ -159,7 +171,7 @@ impl Default for VaultCreationCost {
         // Invariant: Wont panic, `Self::max()` is 20_000_000.
         // FIXME: Really low default for testing purposes.
         Self::new(Uint128::new(1_000)).unwrap()
-    } 
+    }
 }
 
 #[cw_serde]
@@ -182,8 +194,8 @@ pub struct VaultParameters {
 impl VaultParameters {
     pub fn new(params: VaultParametersInstantiateMsg) -> Result<Self, InstantiationError> {
         use InstantiationError::*;
-        let base_factor = PriceFactor::new(&params.base_factor)
-            .ok_or(InvalidPriceFactor(params.base_factor))?;
+        let base_factor =
+            PriceFactor::new(&params.base_factor).ok_or(InvalidPriceFactor(params.base_factor))?;
 
         let limit_factor = PriceFactor::new(&params.limit_factor)
             .ok_or(InvalidPriceFactor(params.limit_factor))?;
@@ -210,20 +222,15 @@ impl VaultParameters {
             (_, _, true) => Err(ContradictoryConfig {
                 reason: "A vault without a limit order will have idle capital".into(),
             }),
-            (_, true, _) if !full_range_weight.is_max() => {
-                Err(ContradictoryConfig {
-                    reason:
-                        "If the vault doenst have a base order, the full range weight should be 1"
-                            .into(),
-                })
-            }
-            (_, false, _) if full_range_weight.is_max() => {
-                Err(ContradictoryConfig {
-                    reason: "If the full range weight is 1, the base factor should also be".into(),
-                })
-            }
+            (_, true, _) if !full_range_weight.is_max() => Err(ContradictoryConfig {
+                reason: "If the vault doenst have a base order, the full range weight should be 1"
+                    .into(),
+            }),
+            (_, false, _) if full_range_weight.is_max() => Err(ContradictoryConfig {
+                reason: "If the full range weight is 1, the base factor should also be".into(),
+            }),
             _ => Err(ContradictoryConfig {
-                reason: "We dont support vaults with less than 3 positions for now".into()
+                reason: "We dont support vaults with less than 3 positions for now".into(),
             }),
         }?;
 
@@ -247,8 +254,8 @@ pub struct VaultInfo {
 impl VaultInfo {
     pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, InstantiationError> {
         use InstantiationError::*;
-        let pool_id = PoolId::new(info.pool_id, &deps.querier)
-            .ok_or(InvalidPoolId(info.pool_id))?;
+        let pool_id =
+            PoolId::new(info.pool_id, &deps.querier).ok_or(InvalidPoolId(info.pool_id))?;
 
         assert!(pool_id.0 == info.pool_id);
 
@@ -272,7 +279,7 @@ impl VaultInfo {
         Ok(VaultInfo {
             pool_id,
             rebalancer,
-            admin
+            admin,
         })
     }
 
@@ -363,10 +370,12 @@ impl VaultInfo {
 #[cw_serde]
 pub enum VaultRebalancer {
     Admin {},
-    Delegate { rebalancer: Addr },
-    Anyone { 
+    Delegate {
+        rebalancer: Addr,
+    },
+    Anyone {
         price_factor_before_rebalance: PriceFactor,
-        time_before_rabalance: Timestamp
+        time_before_rabalance: Timestamp,
     },
 }
 
@@ -375,8 +384,8 @@ impl VaultRebalancer {
         rebalancer: VaultRebalancerInstantiateMsg,
         deps: Deps,
     ) -> Result<Self, InstantiationError> {
-        use VaultRebalancerInstantiateMsg::*;
         use InstantiationError::*;
+        use VaultRebalancerInstantiateMsg::*;
 
         match rebalancer {
             Delegate { rebalancer: x } => {
@@ -387,19 +396,24 @@ impl VaultRebalancer {
                 Ok(Self::Delegate { rebalancer })
             }
             Admin {} => Ok(Self::Admin {}),
-            Anyone { seconds_before_rabalance, price_factor_before_rebalance } => {
-                Ok(Self::Anyone {
-                    price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
-                        .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
-                    time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance)
-                })
-            }
+            Anyone {
+                seconds_before_rabalance,
+                price_factor_before_rebalance,
+            } => Ok(Self::Anyone {
+                price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
+                    .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
+                time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance),
+            }),
         }
     }
 }
 
 #[cw_serde]
-pub enum PositionType { FullRange, Base, Limit }
+pub enum PositionType {
+    FullRange,
+    Base,
+    Limit,
+}
 
 type MaybePositionId = Option<u64>;
 
@@ -407,8 +421,8 @@ type MaybePositionId = Option<u64>;
 //       in one direction.
 #[cw_serde]
 pub struct StateSnapshot {
-    pub last_price: Decimal, 
-    pub last_timestamp: Timestamp
+    pub last_price: Decimal,
+    pub last_timestamp: Timestamp,
 }
 
 #[cw_serde]
@@ -425,7 +439,7 @@ pub struct VaultState {
     /// last price and last timestamp since the last rebalance. Optional as it
     /// requires a first rebalance to happen to be set. After that, both will
     /// always be set.
-    pub last_price_and_timestamp: Option<StateSnapshot>
+    pub last_price_and_timestamp: Option<StateSnapshot>,
 }
 
 impl VaultState {
@@ -437,7 +451,6 @@ impl VaultState {
         }
     }
 }
-
 
 #[cw_serde]
 #[derive(Default)]
@@ -453,40 +466,53 @@ pub struct FeesInfo {
 }
 
 impl FeesInfo {
-    pub fn new(
-        admin_fee: String,
-        vault_info: &VaultInfo,
-        info: &MessageInfo
-    ) -> Result<FeesInfo, InstantiationError> {
-
+    
+    fn validate_vault_creation_cost(info: &MessageInfo) -> Result<Uint128, InstantiationError> {
         let vault_creation_cost = VaultCreationCost::default();
 
-        let paid_amount = cw_utils::must_pay(info, VAULT_CREATION_COST_DENOM)
-            .unwrap_or_default();
+        let paid_amount = cw_utils::must_pay(info, VAULT_CREATION_COST_DENOM).unwrap_or_default();
 
         if paid_amount != vault_creation_cost.0 {
-            return Err(InstantiationError::VaultCreationCostNotPaid { 
+            Err(InstantiationError::VaultCreationCostNotPaid {
                 cost: vault_creation_cost.0.into(),
                 denom: VAULT_CREATION_COST_DENOM.into(),
-                got:  paid_amount.into()
+                got: paid_amount.into(),
             })
-        }
+        } else { Ok(paid_amount) }
+    }
 
-        let admin_fee = ProtocolFee::new(&admin_fee)
-            .ok_or(InstantiationError::InvalidAdminFee {
+    fn validate_admin_fee(admin_fee: String, vault_info: &VaultInfo) -> Result<ProtocolFee, InstantiationError> {
+        let admin_fee =
+            ProtocolFee::new(&admin_fee).ok_or(InstantiationError::InvalidAdminFee {
                 max: ProtocolFee::max().to_string(),
-                got: admin_fee 
+                got: admin_fee,
             })?;
 
         if !admin_fee.0.is_zero() && vault_info.admin.is_none() {
             Err(InstantiationError::AdminFeeWithoutAdmin {})
-        } else {
-            Ok(FeesInfo { 
-                admin_fee,
-                protocol_vault_creation_tokens_owned: paid_amount,
-                ..FeesInfo::default() 
-            })
-        }
+        } else { Ok(admin_fee) }
+    }
+
+    pub fn new(
+        admin_fee: String,
+        vault_info: &VaultInfo,
+        info: &MessageInfo,
+    ) -> Result<FeesInfo, InstantiationError> {
+        let paid_amount = Self::validate_vault_creation_cost(info)?;
+        let admin_fee = Self::validate_admin_fee(admin_fee, vault_info)?;
+
+        Ok(FeesInfo {
+            admin_fee,
+            protocol_vault_creation_tokens_owned: paid_amount,
+            ..FeesInfo::default()
+        })
+    }
+
+    pub fn update(&self, admin_fee: String, deps: Deps) -> Result<FeesInfo, InstantiationError> {
+        // Invariant: Any state is present after instantitation.
+        let vault_info = VAULT_INFO.load(deps.storage).unwrap();
+        let admin_fee = Self::validate_admin_fee(admin_fee, &vault_info)?;
+        Ok(FeesInfo { admin_fee, ..self.clone() })
     }
 }
 
@@ -494,7 +520,7 @@ impl FeesInfo {
 #[derive(Default)]
 pub struct FundsInfo {
     pub available_balance0: Uint128,
-    pub available_balance1: Uint128
+    pub available_balance1: Uint128,
 }
 
 /// VAULT_INFO Holds non-mathematical generally immutable information
@@ -518,4 +544,3 @@ pub const FEES_INFO: Item<FeesInfo> = Item::new("fees_info");
 /// FUNDS_INFO Refers to the known funds available to the contract,
 /// without counting protocol/admin fees.
 pub const FUNDS_INFO: Item<FundsInfo> = Item::new("funds_info");
-

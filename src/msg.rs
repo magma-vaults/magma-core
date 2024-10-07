@@ -66,8 +66,11 @@ pub enum ExecuteMsg {
     Deposit(DepositMsg),
     Rebalance {},
     Withdraw(WithdrawMsg),
-    WithdrawProtocolFees { },
-    WithdrawAdminFees { }
+    WithdrawProtocolFees {},
+    WithdrawAdminFees {},
+    ChangeVaultInfo(VaultInfoInstantiateMsg),
+    ChangeVaultParameters(VaultParametersInstantiateMsg),
+    ChangeAdminFee { new_admin_fee: String }
 }
 
 #[cw_serde]

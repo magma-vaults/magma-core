@@ -126,9 +126,19 @@ pub enum ProtocolOperationError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum AdminOperationError {
-    #[error("Cant claim admin fees from non admin account")]
-    UnauthorizedAdminAccount { },
+    // TODO Generalize.
+    #[error("Cant do admin operation \"{0}\" from non admin account")]
+    UnauthorizedAdminAccount(String),
 
-    #[error("Cant claim admin fees if vault has no admin")]
-    AdminFeesClaimForNonExistantAdmin { },
+    #[error("Cant do admin operation \"{0}\" if vault has no admin")]
+    NonExistantAdmin(String),
+
+    #[error("Tried to reinstantiate immutable field: {0}")]
+    ImmutableReInstantiation(String),
+
+    // FIXME: `InstantiationError` has variants that will never happen here.
+    //        Properly structure instantiation errors to prevent this.
+    #[error("Tried to improperly reinstantiate state: {0}")]
+    ReInstantiation(#[from] InstantiationError),
 }
+

@@ -99,6 +99,9 @@ pub fn execute(
         Withdraw(withdraw_msg) => Ok(execute::withdraw(withdraw_msg, deps, env, info)?),
         WithdrawProtocolFees {} => Ok(execute::withdraw_protocol_fees(deps, info)?),
         WithdrawAdminFees {} => Ok(execute::withdraw_admin_fees(deps, info)?),
+        ChangeVaultInfo(new_vault_info) => Ok(execute::change_vault_info(new_vault_info, deps, info)?),
+        ChangeVaultParameters(new_vault_parameters) => Ok(execute::change_vault_parameters(new_vault_parameters, deps, info)?),
+        ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps)?)
     }
 }
 
@@ -622,19 +625,6 @@ mod test {
     }
 
     #[test]
-    fn no_limit_position_on_rebalance() {
-        panic!("TODO: Calc expression to get amount variations for the balances to get in proportion (see issue #18)");
-        // let pool_mockup = PoolMockup::new(100_000, 200_000);
-        // let vault_mockup = VaultMockup::new(&pool_mockup, VaultParametersInstantiateMsg {
-        //     base_factor: "2".into(),
-        //     limit_factor: "1.45".into(),
-        //     full_range_weight: "0.55".into(),
-        // });
-        // 
-        // vault_mockup.deposit(10_000, 25_000, &pool_mockup.user1).unwrap();
-    }
-
-    #[test]
     fn rebalance_after_price_change() {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
@@ -902,6 +892,11 @@ mod test {
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
+    }
+
+    #[test]
+    fn test_protocol_fees_withdrawal() {
+        panic!("TODO") 
     }
 
 }
