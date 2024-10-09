@@ -610,7 +610,6 @@ pub fn withdraw(
         .unwrap()
         .balance;
 
-    let shares_held = Decimal::raw(shares_held.into());
     let total_shares_supply = Decimal::raw(total_shares_supply.into());
 
     // Invariant: We already verified `total_shares_supply` is not zero,
@@ -619,7 +618,7 @@ pub fn withdraw(
     //            always be smaller than the total supply, the resulting division
     //            will always be a valid Weight.
     let shares_proportion = Weight::try_from(
-        shares_held.checked_div(total_shares_supply).unwrap()
+        Decimal::raw(shares.into()).checked_div(total_shares_supply).unwrap()
     ).unwrap();
 
     let expected_withdrawn_amount0 = shares_proportion.mul_raw(bal0).atomics();
@@ -683,7 +682,7 @@ pub fn withdraw(
 
     let shares_burn_response = execute_burn(deps, env.clone(), info, shares).map_err(|_| {
         InvalidWithdrawalAmount {
-            owned: shares_held.atomics().into(),
+            owned: shares_held.into(),
             withdrawn: shares.into(),
         }
     })?;

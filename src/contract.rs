@@ -338,10 +338,12 @@ mod test {
 
         fn deposit(
             &self,
-            amount0: u128,
-            amount1: u128,
+            usdc: u128,
+            osmo: u128,
             from: &SigningAccount
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            let (amount0, amount1) = (usdc, osmo);
+
             let execute_msg = &ExecuteMsg::Deposit(DepositMsg {
                 amount0: Uint128::new(amount0),
                 amount1: Uint128::new(amount1),
@@ -908,4 +910,48 @@ mod test {
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
     }
 
+    #[test]
+    fn partial_withdrawal_without_rebalance() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
+        let usdc_amount = 10_000;
+        let osmo_amount = 10_000;
+        vault_mockup.deposit(usdc_amount, osmo_amount, &pool_mockup.user1).unwrap();
+
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        assert_eq!((shares + MIN_LIQUIDITY).u128(), usdc_amount);
+
+        vault_mockup.withdraw(Uint128::new(4444), &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+
+        let bals = vault_mockup.vault_balances_query();
+        println!("{:?}", bals);
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        println!("{:?}", shares);
+    }
+
+    #[test]
+    fn partial_withdrawal_with_rebalance() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
+        let usdc_amount = 10_000;
+        let osmo_amount = 10_000;
+        vault_mockup.deposit(usdc_amount, osmo_amount, &pool_mockup.user1).unwrap();
+
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        assert_eq!((shares + MIN_LIQUIDITY).u128(), usdc_amount);
+
+        vault_mockup.withdraw(Uint128::new(4444), &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares/Uint128::new(2), &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        assert!(shares.is_zero());
+    }
 }
