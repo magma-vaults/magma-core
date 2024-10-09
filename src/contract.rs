@@ -6,9 +6,7 @@ use cw20_base::contract::{query_balance, query_token_info};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 
-use crate::msg::
-    QueryMsg
-;
+use crate::msg::QueryMsg;
 use crate::state::{FeesInfo, FundsInfo, FEES_INFO, FUNDS_INFO};
 use crate::{do_me, execute, query};
 use crate::{

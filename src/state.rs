@@ -396,11 +396,11 @@ impl VaultRebalancer {
         use VaultRebalancerInstantiateMsg::*;
 
         match rebalancer {
-            Delegate { rebalancer: x } => {
+            Delegate { rebalancer } => {
                 let rebalancer = deps
                     .api
-                    .addr_validate(&x)
-                    .map_err(|_| InvalidDelegateAddress(x))?;
+                    .addr_validate(&rebalancer)
+                    .map_err(|_| InvalidDelegateAddress(rebalancer))?;
                 Ok(Self::Delegate { rebalancer })
             }
             Admin {} => Ok(Self::Admin {}),

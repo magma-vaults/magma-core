@@ -610,10 +610,17 @@ pub fn withdraw(
         .unwrap()
         .balance;
 
+    if shares > shares_held {
+        return Err(InvalidWithdrawalAmount {
+            owned: shares_held.into(),
+            withdrawn: shares.into(),
+        })
+    }
+
     let total_shares_supply = Decimal::raw(total_shares_supply.into());
 
     // Invariant: We already verified `total_shares_supply` is not zero,
-    //            and we also know that it will always be larger than `shares_held`,
+    //            and we also know that it will always be larger than `shares`,
     //            thus the division cant overflow. Also, because the shares will
     //            always be smaller than the total supply, the resulting division
     //            will always be a valid Weight.
@@ -680,12 +687,8 @@ pub fn withdraw(
     // Invariant: `VAULT_INFO` will always be present after instantiation.
     let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
 
-    let shares_burn_response = execute_burn(deps, env.clone(), info, shares).map_err(|_| {
-        InvalidWithdrawalAmount {
-            owned: shares_held.into(),
-            withdrawn: shares.into(),
-        }
-    })?;
+    // Invariant: We verified earlier that `info.sender` holds at least `shares`.
+    let shares_burn_response = execute_burn(deps, env.clone(), info, shares).unwrap();
 
     Ok(shares_burn_response
         .add_message(rewards_claim_msg)
