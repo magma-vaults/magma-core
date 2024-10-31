@@ -1,5 +1,6 @@
 use thiserror::Error;
- 
+use crate::constants::TWAP_SECONDS;
+
 #[derive(Error, Debug, PartialEq)]
 pub enum ContractError {
     #[error("Entry point {0} is not payable")]
@@ -87,8 +88,17 @@ pub enum RebalanceError {
     #[error("Only the delegate address {delegate} can rebalance, tried to do so from {got}")]
     UnauthorizedDelegateAccount { delegate: String, got: String },
 
+    #[error("Rebalancing the same vault twice per block is not supported, wait for the next block")]
+    CantRebalanceTwicePerBlock(),
+
     #[error("Cant rebalance, price hasnt moved enough (price: {price}; movement_factor: {factor})")]
     PriceHasntMovedEnough { price: String, factor: String },
+
+    #[error("Cant rebalance, the price {price} moved outside [{twap}*0.99, {twap}*1.01]")]
+    PriceMovedTooMuchInLastMinute { price: String, twap: String },
+
+    #[error("Cant rebalance pools that were created less than {TWAP_SECONDS} seconds ago")]
+    PoolWasJustCreated(),
 
     #[error("Not enough time passed since last rebalance, can rebalance in {time_left}")]
     NotEnoughTimePassed { time_left: u64 },

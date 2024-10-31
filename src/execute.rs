@@ -1,6 +1,5 @@
 use std::str::FromStr;
 
-use anyhow::ensure;
 use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_token_info}, state::TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
@@ -420,6 +419,7 @@ fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), Rebalanc
     let vault_info = VAULT_INFO.load(deps.storage).unwrap();
     let vault_state = VAULT_STATE.load(deps.storage).unwrap();
     let price = vault_info.pool_id.price(&deps.querier);
+    let twap_price = vault_info.pool_id.twap(&deps.querier, &env).ok_or(PoolWasJustCreated())?;
     
     match vault_info.rebalancer {
         VaultRebalancer::Admin { } => {
@@ -447,7 +447,10 @@ fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), Rebalanc
                 last_timestamp
             }) = vault_state.last_price_and_timestamp {
                 let current_time = env.block.time;
-                assert!(current_time > last_timestamp);
+                assert!(current_time.plus_seconds(1) > last_timestamp);
+                if current_time == last_timestamp {
+                    return Err(CantRebalanceTwicePerBlock())
+                }
 
                 let threshold = last_timestamp.plus_seconds(time_before_rabalance.seconds());
                 if threshold > current_time {
@@ -457,20 +460,34 @@ fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), Rebalanc
 
                 let upper_bound = last_price
                     .checked_mul(price_factor_before_rebalance.0)
-                    .unwrap_or(Decimal::MAX);
+                    .unwrap_or(Decimal::MAX)
+                    .checked_sub(Decimal::raw(1))
+                    .unwrap_or(Decimal::MIN);
 
                 // Invariant: Wont overflow as price factors are always greater or equal to 1
                 let lower_bound = last_price
                     .checked_div(price_factor_before_rebalance.0)
-                    .unwrap();
+                    .unwrap()
+                    .checked_add(Decimal::raw(1))
+                    .unwrap_or(Decimal::MAX);
 
                 if (lower_bound..=upper_bound).contains(&price) {
                     return Err(PriceHasntMovedEnough { 
-                        price: price.to_string(),
+                        price: lower_bound.to_string(),
                         factor: price_factor_before_rebalance.0.to_string() 
                     })
                 }
 
+                let twap_variation = Weight::new("0.01").unwrap().mul_dec(&twap_price);
+                let max_twap = twap_price.checked_add(twap_variation).unwrap_or(Decimal::MAX);
+                // Invariant: Wont underflow as `twap_price*0.01 < twap_price`.
+                let min_twap = twap_price.checked_sub(twap_variation).unwrap();
+                if !(min_twap..=max_twap).contains(&price) {
+                    return Err(PriceMovedTooMuchInLastMinute { 
+                        price: price.to_string(),
+                        twap: twap_price.to_string()
+                    })
+                }
             }
             
         },

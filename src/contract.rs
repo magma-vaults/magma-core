@@ -128,7 +128,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, error::RebalanceError, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
@@ -210,6 +210,7 @@ mod test {
 
             // NOTE: Could fail if we test multiple positions.
             assert_eq!(position_res.position_id, 1);
+            app.increase_time(TWAP_SECONDS);
 
             let _price = Decimal::new(osmo_in.into()) / Decimal::new(usdc_in.into());
 
@@ -303,6 +304,14 @@ mod test {
 
     impl VaultMockup<'_> {
         fn new(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> VaultMockup {
+            Self::new_with_rebalancer(pool_info, params, VaultRebalancerInstantiateMsg::Admin {})
+        }
+
+        fn new_with_rebalancer(
+            pool_info: &PoolMockup,
+            params: VaultParametersInstantiateMsg,
+            rebalancer: VaultRebalancerInstantiateMsg
+        ) -> VaultMockup {
             let wasm = Wasm::new(&pool_info.app);
             let code_id = store_vaults_code(&wasm, &pool_info.deployer);
             let api = mock_dependencies().api;
@@ -317,7 +326,7 @@ mod test {
                             vault_name: "My USDC/OSMO vault".into(),
                             vault_symbol: "USDCOSMOV".into(),
                             admin: Some(pool_info.deployer.address()),
-                            rebalancer: VaultRebalancerInstantiateMsg::Admin {}
+                            rebalancer
                         },
                         vault_parameters: params,
                     },
@@ -333,6 +342,7 @@ mod test {
             let vault_addr = api.addr_validate(&vault_addr).unwrap();
 
             VaultMockup { vault_addr, wasm }
+
         }
 
         fn deposit(
@@ -952,5 +962,68 @@ mod test {
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         assert!(shares.is_zero());
+    }
+    
+    #[test]
+    fn public_first_rebalancing() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        // FIXME: Typo.
+        let vault_mockup = VaultMockup::new_with_rebalancer(
+            &pool_mockup,
+            vault_params("2", "1.45", "0.55"),
+            VaultRebalancerInstantiateMsg::Anyone { 
+                price_factor_before_rebalance: "1".into(), seconds_before_rabalance: 69
+            }
+        );
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.user2).unwrap();
+    }
+
+    #[test]
+    fn public_rebalancing_at_due_time() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        // FIXME: Typo.
+        let seconds_before_rabalance = 3600;
+        let vault_mockup = VaultMockup::new_with_rebalancer(
+            &pool_mockup,
+            vault_params("2", "1.45", "0.55"),
+            VaultRebalancerInstantiateMsg::Anyone { 
+                price_factor_before_rebalance: "1".into(), seconds_before_rabalance
+            }
+        );
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.user2).unwrap();
+
+        // Hypothesis: `6` as each operation takes 3 seconds.
+        pool_mockup.app.increase_time(seconds_before_rabalance - 6);
+        assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
+        assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
+        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+        assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
+    }
+
+    #[test]
+    fn public_rebalancing_after_price_moved() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        // FIXME: Typo.
+        let vault_mockup = VaultMockup::new_with_rebalancer(
+            &pool_mockup,
+            vault_params("2", "1.45", "0.55"),
+            VaultRebalancerInstantiateMsg::Anyone { 
+                price_factor_before_rebalance: "1.01".into(), seconds_before_rabalance: 0
+            }
+        );
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.user2).unwrap();
+        pool_mockup.app.increase_time(1);
+        assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 10_000).unwrap();
+
+        // NOTE: We wait for the price to settle so we dont get an TWAP error.
+        assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
+        pool_mockup.app.increase_time(30);
+        assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
+        pool_mockup.app.increase_time(30);
+        vault_mockup.rebalance(&pool_mockup.user1).unwrap();
     }
 }

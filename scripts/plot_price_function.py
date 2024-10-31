@@ -22,6 +22,8 @@ def osmo_p(t: int):
     f = floor(t/d)
     return 10**f + (t - d*f)*10**(f-6)
 
+print(osmo_p(-108_000_000))
+
 def osmo_p_inv(p: float) -> int | None:
     if p < 0: return None
     z = floor(log10(p))

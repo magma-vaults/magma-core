@@ -1,5 +1,5 @@
 use crate::constants::{
-    MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM,
+    MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, TWAP_SECONDS, VAULT_CREATION_COST_DENOM
 };
 use crate::error::{InstantiationError, ProtocolOperationError};
 use crate::{
@@ -7,8 +7,9 @@ use crate::{
     msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, MessageInfo, QuerierWrapper, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, Env, MessageInfo, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
+use osmosis_std::types::osmosis::twap::v1beta1::TwapQuerier;
 use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
@@ -119,6 +120,27 @@ impl PoolId {
 
         // Invariant: We know that `querier.spot_price(...)` returns valid `Decimal` prices.
         Decimal::from_str(&p).unwrap()
+    }
+
+    pub fn twap(&self, querier: &QuerierWrapper, env: &Env) -> Option<Decimal> {
+        let start_time = env.block.time;
+        // Invariant: Wont overflow as `env.block.time` is reasonable.
+        let osmosis_start_time = Some(osmosis_std::shim::Timestamp {
+            seconds: start_time.seconds().checked_sub(TWAP_SECONDS).unwrap_or(0).try_into().unwrap(),
+            nanos: 0
+        });
+        let pool = self.to_pool(querier);
+
+        // Invariant: Will only return `None` if `pool` was recently created, as
+        //            we already ensured that `self` is valid during instantiation
+        //            and that the start time is in the near past.
+        let p = TwapQuerier::new(querier)
+            .geometric_twap_to_now(self.0, pool.token0, pool.token1, osmosis_start_time)
+            .ok()?
+            .geometric_twap;
+
+        // Invariant: We know `.geometric_twap_to_now(...)` returns valid `Decimal` values.
+        Some(Decimal::from_str(&p).unwrap())
     }
 }
 
