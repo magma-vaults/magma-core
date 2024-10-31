@@ -99,7 +99,8 @@ pub fn execute(
         WithdrawAdminFees {} => Ok(execute::withdraw_admin_fees(deps, info)?),
         ChangeVaultInfo(new_vault_info) => Ok(execute::change_vault_info(new_vault_info, deps, info)?),
         ChangeVaultParameters(new_vault_parameters) => Ok(execute::change_vault_parameters(new_vault_parameters, deps, info)?),
-        ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps, info)?)
+        ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps, info)?),
+        ChangeProtocolFee { new_protocol_fee } => Ok(execute::change_protocol_fee(new_protocol_fee, deps, info)?)
     }
 }
 

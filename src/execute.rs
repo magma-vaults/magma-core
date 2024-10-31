@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use anyhow::ensure;
 use cosmwasm_std::{coin, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128};
 use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_token_info}, state::TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
@@ -311,7 +312,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
             1,
         ))
     }
-
+    
     if !limit_factor.is_one() && (!limit_balance0.is_zero() || !limit_balance1.is_zero()) {
         if limit_balance0.is_zero() {
             // Invariant: `limit_factor > 1`, thus wont panic.

@@ -70,7 +70,8 @@ pub enum ExecuteMsg {
     WithdrawAdminFees {},
     ChangeVaultInfo(VaultInfoInstantiateMsg),
     ChangeVaultParameters(VaultParametersInstantiateMsg),
-    ChangeAdminFee { new_admin_fee: String }
+    ChangeAdminFee { new_admin_fee: String },
+    ChangeProtocolFee { new_protocol_fee: String }
 }
 
 #[cw_serde]
