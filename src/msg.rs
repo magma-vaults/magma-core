@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
-use cosmwasm_std::Uint128;
-use cw20::{BalanceResponse, TokenInfoResponse};
+use cosmwasm_std::{Binary, Uint128};
+use cw20::{BalanceResponse, Expiration, TokenInfoResponse};
 use crate::state::{FeesInfo, PositionType, VaultInfo, VaultState};
 
 #[cw_serde]
@@ -71,7 +71,17 @@ pub enum ExecuteMsg {
     ChangeVaultInfo(VaultInfoInstantiateMsg),
     ChangeVaultParameters(VaultParametersInstantiateMsg),
     ChangeAdminFee { new_admin_fee: String },
-    ChangeProtocolFee { new_protocol_fee: String }
+    ChangeProtocolFee { new_protocol_fee: String },
+
+    // Cw20 Realization.
+    Transfer { recipient: String, amount: Uint128 },
+    Burn { amount: Uint128 },
+    Send { contract: String, amount: Uint128, msg: Binary },
+    IncreaseAllowance { spender: String, amount: Uint128, expires: Option<Expiration> },
+    DecreaseAllowance { spender: String, amount: Uint128, expires: Option<Expiration> },
+    TransferFrom { owner: String, recipient: String, amount: Uint128 },
+    SendFrom { owner: String, contract: String, amount: Uint128, msg: Binary },
+    BurnFrom { owner: String, amount: Uint128 },
 }
 
 #[cw_serde]

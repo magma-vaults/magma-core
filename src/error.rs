@@ -22,7 +22,10 @@ pub enum ContractError {
     AdminOperation(#[from] AdminOperationError),
 
     #[error("Protocol operation error: {0}")]
-    ProtocolOperation(#[from] ProtocolOperationError)
+    ProtocolOperation(#[from] ProtocolOperationError),
+
+    #[error("Cw20 error: {0}")]
+    Cw20(#[from] cw20_base::ContractError)
 }
 
 #[derive(Error, Debug, PartialEq)]

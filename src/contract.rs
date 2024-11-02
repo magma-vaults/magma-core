@@ -2,7 +2,8 @@ use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
     StdResult, Uint128
 };
-use cw20_base::contract::{query_balance, query_token_info};
+use cw20_base::allowances::{execute_burn_from, execute_decrease_allowance, execute_increase_allowance, execute_send_from, execute_transfer_from};
+use cw20_base::contract::{execute_burn, execute_send, execute_transfer, query_balance, query_token_info};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 
@@ -100,7 +101,17 @@ pub fn execute(
         ChangeVaultInfo(new_vault_info) => Ok(execute::change_vault_info(new_vault_info, deps, info)?),
         ChangeVaultParameters(new_vault_parameters) => Ok(execute::change_vault_parameters(new_vault_parameters, deps, info)?),
         ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps, info)?),
-        ChangeProtocolFee { new_protocol_fee } => Ok(execute::change_protocol_fee(new_protocol_fee, deps, info)?)
+        ChangeProtocolFee { new_protocol_fee } => Ok(execute::change_protocol_fee(new_protocol_fee, deps, info)?),
+
+        // Cw20 Realization.
+        Transfer { recipient, amount } => Ok(execute_transfer(deps, env, info, recipient, amount)?),
+        Burn { amount } => Ok(execute_burn(deps, env, info, amount)?),
+        Send { contract, amount, msg } => Ok(execute_send(deps, env, info, contract, amount, msg)?),
+        IncreaseAllowance { spender, amount, expires } => Ok(execute_increase_allowance( deps, env, info, spender, amount, expires)?),
+        DecreaseAllowance { spender, amount, expires } => Ok(execute_decrease_allowance( deps, env, info, spender, amount, expires)?),
+        TransferFrom { owner, recipient, amount, } => Ok(execute_transfer_from(deps, env, info, owner, recipient, amount)?),
+        BurnFrom { owner, amount } => Ok(execute_burn_from(deps, env, info, owner, amount)?),
+        SendFrom { owner, contract, amount, msg, } => Ok(execute_send_from( deps, env, info, owner, contract, amount, msg)?),
     }
 }
 
