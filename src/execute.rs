@@ -198,6 +198,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         }
     };
 
+    assert!(bal0 == balanced_balance0.atomics() || bal1 == balanced_balance1.atomics());
     assert!(bal0 >= raw(&balanced_balance0) && bal1 >= raw(&balanced_balance1));
 
     // Invariant: Balanced positions have both amounts different from zero.
@@ -260,6 +261,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     if !base_factor.is_one() && !balanced_balance0.is_zero() {
         assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
     }
+
 
     let (limit_balance0, limit_balance1) = {
         // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
@@ -362,8 +364,12 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
             ))
         } else {
             // Invariant: Both limit balances cant be non zero, or the resutling position
-            //            wouldnt be a limit position.
-            unreachable!()
+            //            wouldnt be a limit position. 
+            // Proof: Assume that wasnt the case due to, for example, roundings during 
+            //        divisions. That would immediately break the invariant stated directly
+            //        after `balanced_balance0` and `balanced_balance1` computation, whose
+            //        proofs are trivial.
+            debug_assert!(false)
         }
     }
 

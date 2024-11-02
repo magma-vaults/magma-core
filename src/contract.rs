@@ -531,10 +531,10 @@ mod test {
         let pool_mockup = PoolMockup::new(100_000, 200_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
 
-        vault_mockup.deposit(1_000, 1_500, &pool_mockup.user1).unwrap();
+        vault_mockup.deposit(1_000, 1_501, &pool_mockup.user1).unwrap();
         let bals = vault_mockup.vault_balances_query();
         assert_eq!(bals.bal0.u128(), 1_000);
-        assert_eq!(bals.bal1.u128(), 1_500);
+        assert_eq!(bals.bal1.u128(), 1_501);
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         let full_range_position = vault_mockup.position_balances_query(PositionType::FullRange);
