@@ -26,7 +26,7 @@ pub fn instantiate(
     let vault_info = VaultInfo::new(msg.vault_info.clone(), deps.as_ref())?;
     let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
-    let fees_info = FeesInfo::new(msg.vault_parameters.admin_fee, &vault_info, &info)?;
+    let fees_info = FeesInfo::new(msg.vault_info.admin_fee, &vault_info, &info)?;
     let funds_info = FundsInfo::default();
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
@@ -293,7 +293,6 @@ mod test {
             full_range_weight: full.into(),
             base_factor: base.into(),
             limit_factor: limit.into(),
-            admin_fee: ProtocolFee::default().0.0.to_string()
         }
     }
 
@@ -326,6 +325,7 @@ mod test {
                             vault_name: "My USDC/OSMO vault".into(),
                             vault_symbol: "USDCOSMOV".into(),
                             admin: Some(pool_info.deployer.address()),
+                            admin_fee: ProtocolFee::default().0.0.to_string(),
                             rebalancer
                         },
                         vault_parameters: params,
