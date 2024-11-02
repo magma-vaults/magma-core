@@ -1,5 +1,5 @@
 use crate::constants::{
-    MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, TWAP_SECONDS, VAULT_CREATION_COST_DENOM
+    DEFAULT_PROTOCOL_FEE, DEFAULT_VAULT_CREATION_COST, MAX_PROTOCOL_FEE, MAX_TICK, MAX_VAULT_CREATION_COST, TWAP_SECONDS, VAULT_CREATION_COST_DENOM
 };
 use crate::error::{InstantiationError, ProtocolOperationError};
 use crate::{
@@ -178,8 +178,8 @@ impl ProtocolFee {
 
 impl Default for ProtocolFee {
     fn default() -> Self {
-        // Invariant: Wont panic, `Self::max()` is 0.1,
-        Self::new("0.05").unwrap()
+        // Invariant: Wont panic as the static var is in [0, 1].
+        Self(Weight::try_from(*DEFAULT_PROTOCOL_FEE).unwrap())
     }
 }
 
@@ -198,9 +198,8 @@ impl VaultCreationCost {
 
 impl Default for VaultCreationCost {
     fn default() -> Self {
-        // Invariant: Wont panic, `Self::max()` is 20_000_000.
-        // FIXME: Really low default for testing purposes.
-        Self::new(Uint128::new(1_000)).unwrap()
+        // Invariant: Wont panic, as the static var is clearly below `Self::max()`.
+        Self::new(DEFAULT_VAULT_CREATION_COST).unwrap()
     }
 }
 

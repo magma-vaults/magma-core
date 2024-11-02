@@ -5,7 +5,7 @@ use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_toke
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
 
 use crate::{
-    constants::{MIN_LIQUIDITY, PROTOCOL, VAULT_CREATION_COST_DENOM}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, WithdrawMsg}, query, state::{
+    assert_approx_eq, constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL, VAULT_CREATION_COST_DENOM}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, WithdrawMsg}, query, state::{
         FundsInfo, PositionType, ProtocolFee, StateSnapshot, VaultInfo, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{calc_x0, price_function_inv, raw}};
 
 pub fn deposit(
@@ -213,10 +213,11 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         assert!(!balanced_balance0.is_zero() && !balanced_balance1.is_zero());
         assert!(!bal0.is_zero() && !bal1.is_zero());
 
-        // We take 0.3% slippage to check if balances have the right proportion.
         let balances_price = balanced_balance1 / balanced_balance0;
-        assert!(balances_price >= price * Decimal::from_str("0.997").unwrap());
-        assert!(balances_price <= price * Decimal::from_str("1.003").unwrap());
+        // Invariant: The difference between prices should be atomic, as `utils::calc_x0`
+        //            already ensures that the proportions hold. We still take one
+        //            atom to compensate for roundings.
+        assert_approx_eq!(balances_price, price, Decimal::one());
     }
 
     let (full_range_balance0, full_range_balance1) = {
@@ -238,10 +239,11 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     } else {
         assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
 
-        // We take 0.3% slippage to check if balances have the right proportion.
         let balances_price = full_range_balance1 / full_range_balance0;
-        assert!(balances_price >= price * Decimal::from_str("0.997").unwrap());
-        assert!(balances_price <= price * Decimal::from_str("1.003").unwrap())
+        // Invariant: The difference between prices should be atomic, as `utils::calc_x0`
+        //            already ensures that the proportions hold. We still take one
+        //            atom to compensate for roundings.
+        assert_approx_eq!(balances_price, price, Decimal::one());
     }
 
     let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
@@ -560,7 +562,8 @@ pub fn create_position_msg(
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
     let upper_tick = vault_info.closest_valid_tick(upper_tick, &deps.querier).into();
 
-    let slippage = Weight::new("0.997").unwrap();
+    // Invariant: Wont panic as the static var is in [0, 1].
+    let slippage = Weight::try_from(*POSITION_CREATION_SLIPPAGE).unwrap();
 
     MsgCreatePosition {
         pool_id: pool.id,
