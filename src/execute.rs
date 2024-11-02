@@ -366,10 +366,10 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
             // Invariant: Both limit balances cant be non zero, or the resutling position
             //            wouldnt be a limit position. 
             // Proof: Assume that wasnt the case due to, for example, roundings during 
-            //        divisions. That would immediately break the invariant stated directly
+            //        divisions. That would immediately break the invariants stated directly
             //        after `balanced_balance0` and `balanced_balance1` computation, whose
             //        proofs are trivial.
-            debug_assert!(false)
+            unreachable!()
         }
     }
 
