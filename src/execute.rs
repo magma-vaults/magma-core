@@ -31,6 +31,19 @@ pub fn deposit(
         return Err(ZeroTokensSent {});
     }
 
+    let improper_funds: Vec<_> = info
+        .funds
+        .iter()
+        .map(|x| x.denom.clone())
+        .filter(|x| *x != denom0 && *x != denom1)
+        .collect();
+
+    if !improper_funds.is_empty() {
+        return Err(ImproperTokensSent { 
+            denom0, denom1, unexpected: improper_funds.join(", ") 
+        })
+    }
+
     let amount0_got = info
         .funds
         .iter()

@@ -70,6 +70,9 @@ pub enum DepositError {
     #[error("Nothing to deposit, user sent 0 tokens")]
     ZeroTokensSent {},
 
+    #[error("The vault can only handle tokens {denom0} and {denom1}, but got: {unexpected}")]
+    ImproperTokensSent { denom0: String, denom1: String, unexpected: String },
+
     #[error("Cant mint vault shares to itself ({0})")]
     ShareholderCantBeContract(String),
 

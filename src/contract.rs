@@ -139,7 +139,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 mod test {
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, error::RebalanceError, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
 
     use super::*;
     use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
@@ -307,6 +307,16 @@ mod test {
         }
     }
 
+    fn deposit_msg<T: ToString>(usdc: u128, osmo: u128, to: T) -> ExecuteMsg {
+        ExecuteMsg::Deposit(DepositMsg { 
+            amount0: Uint128::new(usdc),
+            amount1: Uint128::new(osmo),
+            amount0_min: Uint128::zero(),
+            amount1_min: Uint128::zero(),
+            to: to.to_string()
+        })
+    }
+
     struct VaultMockup<'a> {
         vault_addr: Addr,
         wasm: Wasm<'a, OsmosisTestApp>
@@ -364,14 +374,7 @@ mod test {
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             let (amount0, amount1) = (usdc, osmo);
 
-            let execute_msg = &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(amount0),
-                amount1: Uint128::new(amount1),
-                amount0_min: Uint128::zero(),
-                amount1_min: Uint128::zero(),
-                to: from.address()
-            });
-
+            let execute_msg = &deposit_msg(amount0, amount1, from.address());
             let coin0 = Coin::new(amount0, USDC_DENOM);
             let coin1 = Coin::new(amount1, OSMO_DENOM);
 
@@ -889,11 +892,7 @@ mod test {
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
         let should_err = vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
-            &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(50_000), amount1: Uint128::new(50_000),
-                amount0_min: Uint128::zero(), amount1_min: Uint128::zero(),
-                to: pool_mockup.user1.address()
-            }),
+            &deposit_msg(50_000, 50_000, pool_mockup.user1.address()),
             &[coin(50_000, USDC_DENOM), coin(50_001, OSMO_DENOM)],
             &pool_mockup.user1
         );
@@ -1036,5 +1035,41 @@ mod test {
         assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
         pool_mockup.app.increase_time(30);
         vault_mockup.rebalance(&pool_mockup.user1).unwrap();
+    }
+
+    #[test]
+    fn cant_deposit_improper_tokens() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        let improper_token = "ibc/000000000000000000000000000000000000000000000000000000000000DEAD";
+
+        let improper_user = pool_mockup.app.init_account(&[
+            Coin::new(1_000_000_000_000u128, USDC_DENOM),
+            Coin::new(1_000_000_000_000u128, OSMO_DENOM),
+            Coin::new(1_000_000_000_000u128, improper_token),
+        ]).unwrap();
+
+        assert!(vault_mockup.wasm.execute(
+            &vault_mockup.vault_addr.to_string(),
+            &deposit_msg(10_000, 0, improper_user.address()),
+            &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, improper_token)],
+            &improper_user
+        ).is_err());
+
+        assert!(vault_mockup.wasm.execute(
+            &vault_mockup.vault_addr.to_string(),
+            &deposit_msg(10_000, 0, improper_user.address()),
+            &[Coin::new(10_000, improper_token), Coin::new(10_000, USDC_DENOM)],
+            &improper_user
+        ).is_err());
+
+        assert!(vault_mockup.wasm.execute(
+            &vault_mockup.vault_addr.to_string(),
+            &deposit_msg(10_000, 0, improper_user.address()),
+            &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, OSMO_DENOM), Coin::new(10_000, improper_token)],
+            &improper_user
+        ).is_err());
+
+        vault_mockup.deposit(10_000, 10_000, &improper_user).unwrap();
     }
 }
