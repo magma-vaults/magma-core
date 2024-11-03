@@ -1005,7 +1005,7 @@ mod test {
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
 
         // Hypothesis: `6` as each operation takes 3 seconds.
-        pool_mockup.app.increase_time(seconds_before_rabalance - 6);
+        pool_mockup.app.increase_time((seconds_before_rabalance - 6).into());
         assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
         assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
         vault_mockup.rebalance(&pool_mockup.user1).unwrap();
@@ -1071,5 +1071,26 @@ mod test {
         ).is_err());
 
         vault_mockup.deposit(10_000, 10_000, &improper_user).unwrap();
+    }
+
+    #[test]
+    fn timestamp_operations_wont_panic_for_large_values() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        // FIXME: Typo.
+        let seconds_before_rabalance = u32::MAX;
+        let vault_mockup = VaultMockup::new_with_rebalancer(
+            &pool_mockup,
+            vault_params("2", "1.45", "0.55"),
+            VaultRebalancerInstantiateMsg::Anyone { 
+                price_factor_before_rebalance: "1".into(), seconds_before_rabalance
+            }
+        );
+
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.user2).unwrap();
+        pool_mockup.app.increase_time(1);
+        assert!(vault_mockup.rebalance(&pool_mockup.user2).is_err());
+        pool_mockup.app.increase_time((seconds_before_rabalance - 1).into());
+        vault_mockup.rebalance(&pool_mockup.user2).unwrap();
     }
 }

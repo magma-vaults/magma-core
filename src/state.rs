@@ -431,7 +431,7 @@ impl VaultRebalancer {
             } => Ok(Self::Anyone {
                 price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
                     .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
-                time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance),
+                time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance.into()),
             }),
         }
     }

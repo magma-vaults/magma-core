@@ -475,7 +475,7 @@ fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), Rebalanc
 
                 let threshold = last_timestamp.plus_seconds(time_before_rabalance.seconds());
                 if threshold > current_time {
-                    let time_left = current_time.minus_seconds(threshold.seconds()).seconds();
+                    let time_left = threshold.minus_seconds(current_time.seconds()).seconds();
                     return Err(NotEnoughTimePassed { time_left })
                 }
 

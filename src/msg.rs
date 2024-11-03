@@ -34,7 +34,7 @@ pub enum VaultRebalancerInstantiateMsg {
         /// rebalance if the price has moved this factor since the last rebalance.
         price_factor_before_rebalance: String,
         /// Anyone can only rebalance if this time has passed since the last rebalace.
-        seconds_before_rabalance: u64
+        seconds_before_rabalance: u32
     }
 }
 
