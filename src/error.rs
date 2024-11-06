@@ -136,7 +136,7 @@ pub enum WithdrawalError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum ProtocolOperationError {
-    #[error("Cant do protocol operation \"{0}\" from non protocol account")]
+    #[error("Cant do protocol operation from non protocol account {0}")]
     UnauthorizedProtocolAccount(String),
 
     #[error("Invalid protocol fee: max: {max}; got: {got}")]
@@ -145,21 +145,36 @@ pub enum ProtocolOperationError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum AdminOperationError {
-    #[error("Cant do admin operation \"{0}\" from non admin account")]
+    #[error("Cant do admin operations from non admin account {0}")]
     UnauthorizedAdminAccount(String),
 
-    #[error("Cant do admin operation \"{0}\" if vault has no admin")]
-    NonExistantAdmin(String),
+    #[error("Cant do admin operations if vault has no admin")]
+    NonExistantAdmin(),
 
-    #[error("Tried to reinstantiate immutable field: {0}")]
-    ImmutableReInstantiation(String),
+    #[error("Invalid new proposed vault admin address: {0}")]
+    InvalidNewProposedAdminAddress(String),
+
+    #[error("There is no vault admin migration happening at this time")]
+    NewProposedAdminIsNone(),
+
+    #[error("Only the new proposed admin {expected} can take control of the vault, but {got} tried to")]
+    UnauthorizedNewProposedAdmin { expected: String, got: String },
 
     // FIXME: `InstantiationError` has variants that will never happen here.
     //        Properly structure instantiation errors to prevent this.
     #[error("Tried to improperly reinstantiate state: {0}")]
     ReInstantiation(#[from] InstantiationError),
 
-    #[error("Tried to remove admin, but there are still uncollected admin fees")]
-    RemovingAdminWithUncollectedAdminFees()
+    #[error("Cant burn admin if the vault admin fee is not 0")]
+    BurningAdminWithNonZeroAdminFee(),
+
+    #[error("Tried to burn admin, but there are still uncollected admin fees")]
+    BurningAdminWithUncollectedAdminFees(),
+
+    #[error("Cant burn admin if the vault rebalancer is not Anyone")]
+    BurningAdminWithImproperRebalancer(),
+
+    #[error("Cant burn admin if the vault has a proposed new admin")]
+    BurningAdminWithProposedNewAdmin()
 }
 

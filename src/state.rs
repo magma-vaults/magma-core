@@ -126,7 +126,7 @@ impl PoolId {
         let start_time = env.block.time;
         // Invariant: Wont overflow as `env.block.time` is reasonable.
         let osmosis_start_time = Some(osmosis_std::shim::Timestamp {
-            seconds: start_time.seconds().checked_sub(TWAP_SECONDS).unwrap_or(0).try_into().unwrap(),
+            seconds: start_time.seconds().saturating_sub(TWAP_SECONDS).try_into().unwrap(),
             nanos: 0
         });
         let pool = self.to_pool(querier);
@@ -277,6 +277,7 @@ pub struct VaultInfo {
     #[readonly]
     pub pool_id: PoolId,
     pub admin: Option<Addr>,
+    pub proposed_new_admin: Option<Addr>,
     pub rebalancer: VaultRebalancer,
 }
 
@@ -296,20 +297,40 @@ impl VaultInfo {
                     .addr_validate(&admin)
                     .map_err(|_| InvalidAdminAddress(admin))?,
             )
-        } else {
-            match rebalancer {
-                VaultRebalancer::Anyone { .. } => Ok(None),
-                _ => Err(ContradictoryConfig {
-                    reason: "If admin is none, the rebalancer can only be anyone".into(),
-                }),
-            }?
-        };
+        } else { None };
+
+        rebalancer.rebalancer_consistent_with_admin(&admin)?;
 
         Ok(VaultInfo {
             pool_id,
             rebalancer,
             admin,
+            proposed_new_admin: None
         })
+    }
+    
+    pub fn propose_new_admin(self, new_admin: String, deps: Deps) -> Option<Self> {
+        let proposed_new_admin = Some(deps.api.addr_validate(&new_admin).ok()?);
+        Some(Self { proposed_new_admin, ..self })
+    }
+
+    pub fn unset_proposed_new_admin(self) -> Self {
+        Self { proposed_new_admin: None, ..self }
+    }
+
+    pub fn confirm_new_admin(self) -> Self {
+        let admin = self.proposed_new_admin;
+        Self { admin, proposed_new_admin: None, ..self }
+    }
+
+    pub fn burn_admin(self) -> Self {
+        Self { admin: None, ..self }
+    }
+
+    pub fn change_rebalancer(self, new_rebalancer: VaultRebalancerInstantiateMsg, deps: Deps) -> Result<Self, InstantiationError> {
+        let rebalancer = VaultRebalancer::new(new_rebalancer, deps)?;
+        rebalancer.rebalancer_consistent_with_admin(&self.admin)?;
+        Ok(Self { rebalancer, ..self })
     }
 
     pub fn demon0(&self, querier: &QuerierWrapper) -> String {
@@ -434,6 +455,20 @@ impl VaultRebalancer {
                 time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance.into()),
             }),
         }
+    }
+
+    fn rebalancer_consistent_with_admin(
+        &self,
+        current_vault_admin: &Option<Addr>
+    ) -> Result<(), InstantiationError> {
+        if current_vault_admin.is_none() {
+            match self {
+                VaultRebalancer::Anyone { .. } => Ok(()),
+                _ => Err(InstantiationError::ContradictoryConfig {
+                    reason: "If admin is none, the rebalancer can only be anyone".into(),
+                }),
+            }
+        } else { Ok(()) }
     }
 }
 

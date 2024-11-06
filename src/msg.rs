@@ -63,12 +63,18 @@ pub struct WithdrawMsg {
 
 #[cw_serde]
 pub enum ExecuteMsg {
+    // Core Logic.
     Deposit(DepositMsg),
     Rebalance {},
     Withdraw(WithdrawMsg),
+
+    // Admin/Protocol operations.
     WithdrawProtocolFees {},
     WithdrawAdminFees {},
-    ChangeVaultInfo(VaultInfoInstantiateMsg),
+    ProposeNewAdmin { new_admin: Option<String> },
+    AcceptNewAdmin {},
+    BurnVaultAdmin {},
+    ChangeVaultRebalancer(VaultRebalancerInstantiateMsg),
     ChangeVaultParameters(VaultParametersInstantiateMsg),
     ChangeAdminFee { new_admin_fee: String },
     ChangeProtocolFee { new_protocol_fee: String },

@@ -93,13 +93,19 @@ pub fn execute(
     }
 
     match msg {
+        // Core Logic.
         Deposit(deposit_msg) => Ok(execute::deposit(deposit_msg, deps, env, info)?),
         Rebalance {} => Ok(execute::rebalance(deps, env, info)?),
         Withdraw(withdraw_msg) => Ok(execute::withdraw(withdraw_msg, deps, env, info)?),
+
+        // Admin/Protocol operations.
         WithdrawProtocolFees {} => Ok(execute::withdraw_protocol_fees(deps, info)?),
         WithdrawAdminFees {} => Ok(execute::withdraw_admin_fees(deps, info)?),
-        ChangeVaultInfo(new_vault_info) => Ok(execute::change_vault_info(new_vault_info, deps, info)?),
-        ChangeVaultParameters(new_vault_parameters) => Ok(execute::change_vault_parameters(new_vault_parameters, deps, info)?),
+        ProposeNewAdmin { new_admin } => Ok(execute::propose_new_admin(deps, info, new_admin)?),
+        AcceptNewAdmin {} => Ok(execute::accept_new_admin(deps, info)?),
+        BurnVaultAdmin {} => Ok(execute::burn_vault_admin(deps, info)?),
+        ChangeVaultRebalancer(rebalancer) => Ok(execute::change_vault_rebalancer(rebalancer, deps, info)?),
+        ChangeVaultParameters(parameters) => Ok(execute::change_vault_parameters(parameters, deps, info)?),
         ChangeAdminFee { new_admin_fee } => Ok(execute::change_admin_fee(new_admin_fee, deps, info)?),
         ChangeProtocolFee { new_protocol_fee } => Ok(execute::change_protocol_fee(new_protocol_fee, deps, info)?),
 
@@ -450,6 +456,82 @@ mod test {
             Ok(self.wasm.execute(
                 self.vault_addr.as_ref()   ,
                 &ExecuteMsg::WithdrawProtocolFees {},
+                &[],
+                from
+            )?)
+        }
+
+        fn propose_new_admin(
+            &self,
+            from: &SigningAccount,
+            new: Option<&SigningAccount>
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::ProposeNewAdmin { new_admin: new.map(|x| x.address()) },
+                &[],
+                from
+            )?)
+        }
+        
+        fn accept_new_admin(
+            &self,
+            from: &SigningAccount
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::AcceptNewAdmin {},
+                &[],
+                from
+            )?)
+        }
+
+        fn burn_vault_admin(
+            &self,
+            from: &SigningAccount
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::BurnVaultAdmin {},
+                &[],
+                from
+            )?)
+        }
+
+        fn change_vault_rebalancer(
+            &self,
+            from: &SigningAccount,
+            new_rebalancer: VaultRebalancerInstantiateMsg
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::ChangeVaultRebalancer(new_rebalancer),
+                &[],
+                from
+            )?)
+        }
+
+        fn change_vault_parameters(
+            &self,
+            from: &SigningAccount,
+            new_paramerers: VaultParametersInstantiateMsg
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::ChangeVaultParameters(new_paramerers),
+                &[],
+                from
+            )?)
+        }
+
+        fn change_admin_fee(
+            &self,
+            from: &SigningAccount,
+            new_fee: &str
+        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
+            Ok(self.wasm.execute(
+                self.vault_addr.as_ref(),
+                &ExecuteMsg::ChangeAdminFee { new_admin_fee: new_fee.into() },
                 &[],
                 from
             )?)
@@ -1050,21 +1132,21 @@ mod test {
         ]).unwrap();
 
         assert!(vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(),
+            vault_mockup.vault_addr.as_ref(),
             &deposit_msg(10_000, 0, improper_user.address()),
             &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, improper_token)],
             &improper_user
         ).is_err());
 
         assert!(vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(),
+            vault_mockup.vault_addr.as_ref(),
             &deposit_msg(10_000, 0, improper_user.address()),
             &[Coin::new(10_000, improper_token), Coin::new(10_000, USDC_DENOM)],
             &improper_user
         ).is_err());
 
         assert!(vault_mockup.wasm.execute(
-            &vault_mockup.vault_addr.to_string(),
+            vault_mockup.vault_addr.as_ref(),
             &deposit_msg(10_000, 0, improper_user.address()),
             &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, OSMO_DENOM), Coin::new(10_000, improper_token)],
             &improper_user
@@ -1092,5 +1174,48 @@ mod test {
         assert!(vault_mockup.rebalance(&pool_mockup.user2).is_err());
         pool_mockup.app.increase_time((seconds_before_rabalance - 1).into());
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
+    }
+
+    #[test]
+    fn vault_burning_smoke_test() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
+        vault_mockup.deposit(60_000, 60_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, 30_000).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        vault_mockup.propose_new_admin(&pool_mockup.deployer, Some(&pool_mockup.user1)).unwrap();
+
+        assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
+        vault_mockup.propose_new_admin(&pool_mockup.deployer, None).unwrap();
+        assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
+        vault_mockup.change_vault_rebalancer(&pool_mockup.deployer, VaultRebalancerInstantiateMsg::Anyone { 
+            price_factor_before_rebalance: "2".into(), seconds_before_rabalance: 123
+        }).unwrap();
+        assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
+        vault_mockup.change_admin_fee(&pool_mockup.deployer, "0").unwrap();
+        assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
+        vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+
+        vault_mockup.burn_vault_admin(&pool_mockup.deployer).unwrap();
+        assert!(vault_mockup.propose_new_admin(&pool_mockup.deployer, Some(&pool_mockup.user2)).is_err());
+        assert!(vault_mockup.propose_new_admin(&pool_mockup.user2, Some(&pool_mockup.user1)).is_err());
+        assert!(vault_mockup.accept_new_admin(&pool_mockup.user1).is_err());
+    }
+
+    #[test]
+    fn vault_admin_proposing() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+
+        vault_mockup.propose_new_admin(&pool_mockup.deployer, Some(&pool_mockup.user1)).unwrap();
+        vault_mockup.propose_new_admin(&pool_mockup.deployer, None).unwrap();
+        assert!(vault_mockup.accept_new_admin(&pool_mockup.user1).is_err());
+        vault_mockup.propose_new_admin(&pool_mockup.deployer, Some(&pool_mockup.user1)).unwrap();
+        vault_mockup.accept_new_admin(&pool_mockup.user1).unwrap();
+
+        assert!(vault_mockup.change_vault_parameters(&pool_mockup.deployer, vault_params("2.5", "1.12", "0.1")).is_err());
+        vault_mockup.change_vault_parameters(&pool_mockup.user1, vault_params("2.5", "1.12", "0.1")).unwrap();
     }
 }
