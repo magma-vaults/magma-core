@@ -101,8 +101,8 @@ pub fn position_balances_with_fees(
         .map(|x| x.position.unwrap())
         .unwrap();
 
-    // TODO: What if the position gets out of range? Try to break this invariant below.
-    // Invariant: If position is valid, both assets will be always present.
+    // Invariant: If position is valid, both assets will be always present,
+    //            even for out of range positions.
     let asset0 = pos.asset0.unwrap();
     let asset1 = pos.asset1.unwrap();
     let rewards = pos.claimable_spread_rewards;

@@ -1201,4 +1201,18 @@ mod test {
         assert!(vault_mockup.change_vault_parameters(&pool_mockup.deployer, vault_params("2.5", "1.12", "0.1")).is_err());
         vault_mockup.change_vault_parameters(&pool_mockup.user1, vault_params("2.5", "1.12", "0.1")).unwrap();
     }
+
+    #[test]
+    fn proper_balances_for_out_of_range_vault_positions() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let limit_bals = vault_mockup.position_balances_query(PositionType::Limit);
+        assert!(limit_bals.bal0_fees.is_zero());
+        assert!(limit_bals.bal1_fees.is_zero());
+        assert!(limit_bals.bal0.is_zero());
+        // 5_000 tokens out of proportion, -1 atom.
+        assert_eq!(limit_bals.bal1, Uint128::new(4999));
+    }
 }
