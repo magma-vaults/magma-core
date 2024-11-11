@@ -1,3 +1,4 @@
+use cosmwasm_std::Uint128;
 use thiserror::Error;
 use crate::constants::TWAP_SECONDS;
 
@@ -43,7 +44,7 @@ pub enum InstantiationError {
     InvalidAdminAddress(String),
 
     #[error("Invalid vault admin fee: max: {max}; got: {got}")]
-    InvalidAdminFee { max: String, got: String },
+    InvalidAdminFee { max: Uint128, got: Uint128 },
 
     #[error("The vault admin cant have any fee if the vault doesnt have any admin")]
     AdminFeeWithoutAdmin { },
@@ -51,11 +52,11 @@ pub enum InstantiationError {
     #[error("Contradiction: {reason}")]
     ContradictoryConfig { reason: String },
 
-    #[error("Price factors are String Decimals greater than 1, got: {0}")]
-    InvalidPriceFactor(String),
+    #[error("Price factors are Uint128 Decimals greater than 1, got: {0}")]
+    InvalidPriceFactor(Uint128),
 
-    #[error("Weights are String Decimals in the range [0, 1], got: {0}")]
-    InvalidWeight(String),
+    #[error("Weights are Uint128 Decimals in the range [0, 1], got: {0}")]
+    InvalidWeight(Uint128),
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -73,7 +74,7 @@ pub enum DepositError {
     DepositedAmountsBelowMin { used: String, wanted: String },
 
     #[error("Deposit must be above {min_liquidity}, got: {got}")]
-    DepositedAmountBelowMinLiquidity { min_liquidity: String, got: String }
+    DepositedAmountBelowMinLiquidity { min_liquidity: Uint128, got: String }
 }
 
 #[derive(Error, Debug, PartialEq)]
@@ -88,10 +89,10 @@ pub enum RebalanceError {
     CantRebalanceTwicePerBlock(),
 
     #[error("Cant rebalance, price hasnt moved enough (price: {price}; movement_factor: {factor})")]
-    PriceHasntMovedEnough { price: String, factor: String },
+    PriceHasntMovedEnough { price: Uint128, factor: Uint128 },
 
     #[error("Cant rebalance, the price {price} moved outside [{twap}*0.99, {twap}*1.01]")]
-    PriceMovedTooMuchInLastMinute { price: String, twap: String },
+    PriceMovedTooMuchInLastMinute { price: Uint128, twap: Uint128 },
 
     #[error("Cant rebalance pools that were created less than {TWAP_SECONDS} seconds ago")]
     PoolWasJustCreated(),
@@ -118,7 +119,7 @@ pub enum WithdrawalError {
     CantWithdrawToContract(String),
 
     #[error("Trying to withdraw more shares than owned (owned: {owned}, withdrawn: {withdrawn})")]
-    InvalidWithdrawalAmount { owned: String, withdrawn: String },
+    InvalidWithdrawalAmount { owned: Uint128, withdrawn: Uint128 },
 
     #[error("Withdrawn amounts below min wanted amounts: got: {got}, wanted: {wanted}")]
     WithdrawnAmontsBelowMin { got: String, wanted: String }
@@ -130,7 +131,7 @@ pub enum ProtocolOperationError {
     UnauthorizedProtocolAccount(String),
 
     #[error("Invalid protocol fee: max: {max}; got: {got}")]
-    InvalidProtocolFee { max: String, got: String },
+    InvalidProtocolFee { max: Uint128, got: Uint128 },
 }
 
 #[derive(Error, Debug, PartialEq)]

@@ -307,9 +307,16 @@ mod test {
 
     fn vault_params(base: &str, limit: &str, full: &str) -> VaultParametersInstantiateMsg {
         VaultParametersInstantiateMsg {
-            full_range_weight: full.into(),
-            base_factor: base.into(),
-            limit_factor: limit.into(),
+            full_range_weight: Decimal::from_str(full).unwrap().atomics(),
+            base_factor: Decimal::from_str(base).unwrap().atomics(),
+            limit_factor: Decimal::from_str(limit).unwrap().atomics(),
+        }
+    }
+
+    fn rebalancer_anyone(price_factor_before_rebalance: &str, seconds_before_rebalance: u32) -> VaultRebalancerInstantiateMsg {
+        VaultRebalancerInstantiateMsg::Anyone { 
+            price_factor_before_rebalance: Decimal::from_str(price_factor_before_rebalance).unwrap().atomics(),
+            seconds_before_rebalance
         }
     }
 
@@ -350,7 +357,7 @@ mod test {
                             vault_name: "My USDC/OSMO vault".into(),
                             vault_symbol: "USDCOSMOV".into(),
                             admin: Some(pool_info.deployer.address()),
-                            admin_fee: ProtocolFee::default().0.0.to_string(),
+                            admin_fee: ProtocolFee::default().0.0.atomics(),
                             rebalancer
                         },
                         vault_parameters: params,
@@ -529,7 +536,7 @@ mod test {
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             Ok(self.wasm.execute(
                 self.vault_addr.as_ref(),
-                &ExecuteMsg::ChangeAdminFee { new_admin_fee: new_fee.into() },
+                &ExecuteMsg::ChangeAdminFee { new_admin_fee: Decimal::from_str(new_fee).unwrap().atomics() },
                 &[],
                 from
             )?)
@@ -1049,9 +1056,7 @@ mod test {
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
-            VaultRebalancerInstantiateMsg::Anyone { 
-                price_factor_before_rebalance: "1".into(), seconds_before_rabalance: 69
-            }
+            rebalancer_anyone("1", 69)
         );
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
@@ -1065,9 +1070,7 @@ mod test {
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
-            VaultRebalancerInstantiateMsg::Anyone { 
-                price_factor_before_rebalance: "1".into(), seconds_before_rabalance
-            }
+            rebalancer_anyone("1", seconds_before_rabalance)
         );
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
@@ -1087,9 +1090,7 @@ mod test {
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
-            VaultRebalancerInstantiateMsg::Anyone { 
-                price_factor_before_rebalance: "1.01".into(), seconds_before_rabalance: 0
-            }
+            rebalancer_anyone("1.01", 0)
         );
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
@@ -1145,20 +1146,18 @@ mod test {
     fn timestamp_operations_wont_panic_for_large_values() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         // FIXME: Typo.
-        let seconds_before_rabalance = u32::MAX;
+        let seconds_before_rebalance = u32::MAX;
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
-            VaultRebalancerInstantiateMsg::Anyone { 
-                price_factor_before_rebalance: "1".into(), seconds_before_rabalance
-            }
+            rebalancer_anyone("1", seconds_before_rebalance)
         );
 
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
         pool_mockup.app.increase_time(1);
         assert!(vault_mockup.rebalance(&pool_mockup.user2).is_err());
-        pool_mockup.app.increase_time((seconds_before_rabalance - 1).into());
+        pool_mockup.app.increase_time((seconds_before_rebalance - 1).into());
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
     }
 
@@ -1176,9 +1175,7 @@ mod test {
         assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
         vault_mockup.propose_new_admin(&pool_mockup.deployer, None).unwrap();
         assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
-        vault_mockup.change_vault_rebalancer(&pool_mockup.deployer, VaultRebalancerInstantiateMsg::Anyone { 
-            price_factor_before_rebalance: "2".into(), seconds_before_rabalance: 123
-        }).unwrap();
+        vault_mockup.change_vault_rebalancer(&pool_mockup.deployer, rebalancer_anyone("2", 123)).unwrap();
         assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());
         vault_mockup.change_admin_fee(&pool_mockup.deployer, "0").unwrap();
         assert!(vault_mockup.burn_vault_admin(&pool_mockup.deployer).is_err());

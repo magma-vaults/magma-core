@@ -63,7 +63,7 @@ pub fn deposit(
 
     if !(amount0 > MIN_LIQUIDITY || amount1 > MIN_LIQUIDITY) {
         return Err(DepositedAmountBelowMinLiquidity { 
-            min_liquidity: MIN_LIQUIDITY.into(),
+            min_liquidity: MIN_LIQUIDITY,
             got: format!("({}, {})", amount0, amount1)
         })
     }
@@ -481,19 +481,20 @@ fn can_rebalance(deps: Deps, env: Env, info: MessageInfo) -> Result<(), Rebalanc
 
                 if (lower_bound..=upper_bound).contains(&price) {
                     return Err(PriceHasntMovedEnough { 
-                        price: lower_bound.to_string(),
-                        factor: price_factor_before_rebalance.0.to_string() 
+                        price: price.atomics(),
+                        factor: price_factor_before_rebalance.0.atomics() 
                     })
                 }
 
-                let twap_variation = Weight::new("0.01").unwrap().mul_dec(&twap_price);
+                // Invariant: Wont panic, as 0.01 is a valid weight.
+                let twap_variation = Weight::permille(10).unwrap().mul_dec(&twap_price);
                 let max_twap = twap_price.checked_add(twap_variation).unwrap_or(Decimal::MAX);
                 // Invariant: Wont underflow as `twap_price*0.01 < twap_price`.
                 let min_twap = twap_price.checked_sub(twap_variation).unwrap();
                 if !(min_twap..=max_twap).contains(&price) {
                     return Err(PriceMovedTooMuchInLastMinute { 
-                        price: price.to_string(),
-                        twap: twap_price.to_string()
+                        price: price.atomics(),
+                        twap: twap_price.atomics()
                     })
                 }
             }
@@ -568,8 +569,8 @@ pub fn create_position_msg(
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
     let upper_tick = vault_info.closest_valid_tick(upper_tick, &deps.querier).into();
 
-    // Invariant: Wont panic as the static var is in [0, 1].
-    let slippage = Weight::try_from(*POSITION_CREATION_SLIPPAGE).unwrap();
+    // Invariant: Wont panic as the const is in [0, 1].
+    let slippage = Weight::try_from(POSITION_CREATION_SLIPPAGE).unwrap();
 
     MsgCreatePosition {
         pool_id: pool.id,
@@ -757,7 +758,7 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
 }
 
 pub fn change_protocol_fee(
-    new_protocol_fee: String,
+    new_protocol_fee: Uint128,
     deps: DepsMut,
     info: MessageInfo
 ) -> Result<Response, ProtocolOperationError> {
@@ -899,7 +900,7 @@ pub fn change_vault_parameters(
 }
 
 pub fn change_admin_fee(
-    new_admin_fee: String,
+    new_admin_fee: Uint128,
     deps: DepsMut,
     info: MessageInfo
 ) -> Result<Response, AdminOperationError> {

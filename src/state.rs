@@ -22,8 +22,13 @@ pub struct Weight(pub Decimal);
 impl Weight {
     pub const MAX: Decimal = Decimal::one();
 
-    pub fn new(value: &str) -> Option<Self> {
-        let value = Decimal::from_str(value).ok()?;
+    pub fn new(value: &Uint128) -> Option<Self> {
+        let value = Decimal::raw(value.u128());
+        (value <= Self::MAX).then_some(Self(value))
+    }
+
+    pub fn permille(value: u64) -> Option<Self> {
+        let value = Decimal::permille(value);
         (value <= Self::MAX).then_some(Self(value))
     }
 
@@ -56,11 +61,7 @@ impl Weight {
 impl TryFrom<Decimal> for Weight {
     type Error = ();
     fn try_from(value: Decimal) -> Result<Self, Self::Error> {
-        if value > Self::MAX {
-            Err(())
-        } else {
-            Ok(Self(value))
-        }
+        Self::new(&value.atomics()).ok_or(())
     }
 }
 
@@ -148,8 +149,8 @@ impl PoolId {
 #[readonly::make]
 pub struct PriceFactor(pub Decimal);
 impl PriceFactor {
-    pub fn new(value: &str) -> Option<Self> {
-        let value = Decimal::from_str(value).ok()?;
+    pub fn new(value: &Uint128) -> Option<Self> {
+        let value = Decimal::raw(value.u128());
         (value >= Decimal::one()).then_some(Self(value))
     }
 
@@ -163,10 +164,10 @@ impl PriceFactor {
 pub struct ProtocolFee(pub Weight);
 impl ProtocolFee {
     pub fn max() -> Decimal {
-        *MAX_PROTOCOL_FEE
+        MAX_PROTOCOL_FEE
     }
 
-    pub fn new(value: &str) -> Option<Self> {
+    pub fn new(value: &Uint128) -> Option<Self> {
         let value = Weight::new(value)?;
         (value.0 <= Self::max()).then_some(Self(value))
     }
@@ -178,8 +179,8 @@ impl ProtocolFee {
 
 impl Default for ProtocolFee {
     fn default() -> Self {
-        // Invariant: Wont panic as the static var is in [0, 1].
-        Self(Weight::try_from(*DEFAULT_PROTOCOL_FEE).unwrap())
+        // Invariant: Wont panic as the const is in [0, 1].
+        Self(Weight::try_from(DEFAULT_PROTOCOL_FEE).unwrap())
     }
 }
 
@@ -444,12 +445,12 @@ impl VaultRebalancer {
             }
             Admin {} => Ok(Self::Admin {}),
             Anyone {
-                seconds_before_rabalance,
+                seconds_before_rebalance,
                 price_factor_before_rebalance,
             } => Ok(Self::Anyone {
                 price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
                     .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
-                time_before_rabalance: Timestamp::from_seconds(seconds_before_rabalance.into()),
+                time_before_rabalance: Timestamp::from_seconds(seconds_before_rebalance.into()),
             }),
         }
     }
@@ -542,10 +543,10 @@ impl FeesInfo {
         } else { Ok(paid_amount) }
     }
 
-    fn validate_admin_fee(admin_fee: String, vault_info: &VaultInfo) -> Result<ProtocolFee, InstantiationError> {
+    fn validate_admin_fee(admin_fee: Uint128, vault_info: &VaultInfo) -> Result<ProtocolFee, InstantiationError> {
         let admin_fee =
             ProtocolFee::new(&admin_fee).ok_or(InstantiationError::InvalidAdminFee {
-                max: ProtocolFee::max().to_string(),
+                max: ProtocolFee::max().atomics(),
                 got: admin_fee,
             })?;
 
@@ -555,7 +556,7 @@ impl FeesInfo {
     }
 
     pub fn new(
-        admin_fee: String,
+        admin_fee: Uint128,
         vault_info: &VaultInfo,
         info: &MessageInfo,
     ) -> Result<FeesInfo, InstantiationError> {
@@ -569,17 +570,17 @@ impl FeesInfo {
         })
     }
 
-    pub fn update_admin_fee(&self, admin_fee: String, deps: Deps) -> Result<FeesInfo, InstantiationError> {
+    pub fn update_admin_fee(&self, admin_fee: Uint128, deps: Deps) -> Result<FeesInfo, InstantiationError> {
         // Invariant: Any state is present after instantitation.
         let vault_info = VAULT_INFO.load(deps.storage).unwrap();
         let admin_fee = Self::validate_admin_fee(admin_fee, &vault_info)?;
         Ok(FeesInfo { admin_fee, ..self.clone() })
     }
 
-    pub fn update_protocol_fee(&self, protocol_fee: String) -> Result<FeesInfo, ProtocolOperationError> {
+    pub fn update_protocol_fee(&self, protocol_fee: Uint128) -> Result<FeesInfo, ProtocolOperationError> {
         let protocol_fee = 
             ProtocolFee::new(&protocol_fee).ok_or(ProtocolOperationError::InvalidProtocolFee { 
-                max: (*MAX_PROTOCOL_FEE).to_string(), 
+                max: MAX_PROTOCOL_FEE.atomics(),
                 got: protocol_fee
             })?;
 

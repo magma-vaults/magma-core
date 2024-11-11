@@ -101,6 +101,7 @@ pub fn position_balances_with_fees(
         .map(|x| x.position.unwrap())
         .unwrap();
 
+    // TODO: What if the position gets out of range? Try to break this invariant below.
     // Invariant: If position is valid, both assets will be always present.
     let asset0 = pos.asset0.unwrap();
     let asset1 = pos.asset1.unwrap();
@@ -189,11 +190,11 @@ pub fn calc_shares_and_usable_amounts(
 
         // Invariant: The multiplication wont overflow becuase we
         //            lifted the amount to `Uint256`. The division
-        //            wont fail becuase we just ensured `total1`
-        //            is not zero. The downgrade back to `Uint128`
-        //            wont fail because we divided proportionally
-        //            by `total1`. The same reasoning applies to
-        //            the rest of branches.
+        //            wont panic, becuase we know from above that 
+        //            `total1` is not zero. The downgrade back to
+        //            `Uint128` wont fail because we divided
+        //            proportionally by `total1`. The same
+        //            reasoning applies to the rest of branches.
         let shares = do_ok!(Uint256::from(input_amount1)
            .checked_mul(total_supply.into())?
            .checked_div(total1.into())?

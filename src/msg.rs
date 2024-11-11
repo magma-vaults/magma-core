@@ -5,9 +5,12 @@ use crate::state::{FeesInfo, PositionType, VaultInfo, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
-    pub base_factor: String, // See [`PriceFactor`].
-    pub limit_factor: String, // See [`PriceFactor`].
-    pub full_range_weight: String, // See [`PriceFactor`].
+    /// 18 decimal places [`PriceFactor`].
+    pub base_factor: Uint128,
+    /// 18 decimal places [`PriceFactor`].
+    pub limit_factor: Uint128,
+    /// 18 decimal places [`Weight`].
+    pub full_range_weight: Uint128,
 }
 
 #[cw_serde]
@@ -16,7 +19,8 @@ pub struct VaultInfoInstantiateMsg {
     pub vault_name: String,
     pub vault_symbol: String,
     pub admin: Option<String>,
-    pub admin_fee: String, // See [`ProtocolFee`].
+    /// 18 decimal places [`Weight`].
+    pub admin_fee: Uint128,
     pub rebalancer: VaultRebalancerInstantiateMsg,
 }
 
@@ -30,11 +34,11 @@ pub enum VaultRebalancerInstantiateMsg {
     /// doesnt has an admin. In that case, the specified parameters will
     /// determine if a rebalance is possible.
     Anyone {
-        /// Decimal value, greater or equal than 1. Anyone will only be able to
+        /// 18 decimal places [`PriceFactor`]. Anyone will only be able to 
         /// rebalance if the price has moved this factor since the last rebalance.
-        price_factor_before_rebalance: String,
+        price_factor_before_rebalance: Uint128,
         /// Anyone can only rebalance if this time has passed since the last rebalace.
-        seconds_before_rabalance: u32
+        seconds_before_rebalance: u32
     }
 }
 
@@ -74,8 +78,8 @@ pub enum ExecuteMsg {
     BurnVaultAdmin {},
     ChangeVaultRebalancer(VaultRebalancerInstantiateMsg),
     ChangeVaultParameters(VaultParametersInstantiateMsg),
-    ChangeAdminFee { new_admin_fee: String },
-    ChangeProtocolFee { new_protocol_fee: String },
+    ChangeAdminFee { new_admin_fee: Uint128 },
+    ChangeProtocolFee { new_protocol_fee: Uint128 },
 
     // Cw20 Realization.
     Transfer { recipient: String, amount: Uint128 },
