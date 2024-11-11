@@ -60,16 +60,6 @@ pub enum InstantiationError {
 
 #[derive(Error, Debug, PartialEq)]
 pub enum DepositError {
-    // FIXME I wanted to ask for the inputs twice (swiss cheese model),
-    //       but it do looks quite ugly, and stuff like this error only
-    //       make the code more confusing. Remember, security comes with
-    //       consistent semantics.
-    #[error("Improper balances: expected {expected} but got {got}")]
-    ImproperSentAmounts { expected: String, got: String },
-
-    #[error("Nothing to deposit, user sent 0 tokens")]
-    ZeroTokensSent {},
-
     #[error("The vault can only handle tokens {denom0} and {denom1}, but got: {unexpected}")]
     ImproperTokensSent { denom0: String, denom1: String, unexpected: String },
 

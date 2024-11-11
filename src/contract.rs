@@ -313,10 +313,8 @@ mod test {
         }
     }
 
-    fn deposit_msg<T: ToString>(usdc: u128, osmo: u128, to: T) -> ExecuteMsg {
+    fn deposit_msg<T: ToString>(to: T) -> ExecuteMsg {
         ExecuteMsg::Deposit(DepositMsg { 
-            amount0: Uint128::new(usdc),
-            amount1: Uint128::new(osmo),
             amount0_min: Uint128::zero(),
             amount1_min: Uint128::zero(),
             to: to.to_string()
@@ -380,7 +378,7 @@ mod test {
         ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
             let (amount0, amount1) = (usdc, osmo);
 
-            let execute_msg = &deposit_msg(amount0, amount1, from.address());
+            let execute_msg = &deposit_msg(from.address());
             let coin0 = Coin::new(amount0, USDC_DENOM);
             let coin1 = Coin::new(amount1, OSMO_DENOM);
 
@@ -823,8 +821,6 @@ mod test {
         let improper_deposit = vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
             &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(vault_x),
-                amount1: Uint128::new(vault_y),
                 amount0_min: Uint128::new(vault_x) + Uint128::one(),
                 amount1_min: Uint128::new(vault_y) + Uint128::one(),
                 to: pool_mockup.user1.address()
@@ -840,8 +836,6 @@ mod test {
         vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
             &ExecuteMsg::Deposit(DepositMsg {
-                amount0: Uint128::new(vault_x),
-                amount1: Uint128::new(vault_y),
                 amount0_min: Uint128::new(vault_x),
                 amount1_min: Uint128::new(vault_y),
                 to: pool_mockup.user1.address()
@@ -972,14 +966,6 @@ mod test {
     fn cant_manipulate_contract_balances_in_unintended_ways() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", "0.55"));
-        let should_err = vault_mockup.wasm.execute(
-            vault_mockup.vault_addr.as_ref(),
-            &deposit_msg(50_000, 50_000, pool_mockup.user1.address()),
-            &[coin(50_000, USDC_DENOM), coin(50_001, OSMO_DENOM)],
-            &pool_mockup.user1
-        );
-
-        assert!(should_err.is_err());
         vault_mockup.deposit(50_000, 50_000, &pool_mockup.user1).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
 
@@ -1133,21 +1119,21 @@ mod test {
 
         assert!(vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
-            &deposit_msg(10_000, 0, improper_user.address()),
+            &deposit_msg(improper_user.address()),
             &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, improper_token)],
             &improper_user
         ).is_err());
 
         assert!(vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
-            &deposit_msg(10_000, 0, improper_user.address()),
+            &deposit_msg(improper_user.address()),
             &[Coin::new(10_000, improper_token), Coin::new(10_000, USDC_DENOM)],
             &improper_user
         ).is_err());
 
         assert!(vault_mockup.wasm.execute(
             vault_mockup.vault_addr.as_ref(),
-            &deposit_msg(10_000, 0, improper_user.address()),
+            &deposit_msg(improper_user.address()),
             &[Coin::new(10_000, USDC_DENOM), Coin::new(10_000, OSMO_DENOM), Coin::new(10_000, improper_token)],
             &improper_user
         ).is_err());

@@ -10,8 +10,6 @@ use crate::{
 
 pub fn deposit(
     DepositMsg {
-        amount0,
-        amount1,
         amount0_min,
         amount1_min,
         to,
@@ -27,10 +25,6 @@ pub fn deposit(
 
     let (denom0, denom1) = vault_info.denoms(&deps.querier);
 
-    if amount0.is_zero() && amount1.is_zero() && info.funds.is_empty() {
-        return Err(ZeroTokensSent {});
-    }
-
     let improper_funds: Vec<_> = info
         .funds
         .iter()
@@ -44,26 +38,19 @@ pub fn deposit(
         })
     }
 
-    let amount0_got = info
+    let amount0 = info
         .funds
         .iter()
         .find(|x| x.denom == denom0)
         .map(|x| x.amount)
         .unwrap_or(Uint128::zero());
 
-    let amount1_got = info
+    let amount1 = info
         .funds
         .iter()
         .find(|x| x.denom == denom1)
         .map(|x| x.amount)
         .unwrap_or(Uint128::zero());
-
-    if amount0_got != amount0 || amount1_got != amount1 {
-        return Err(ImproperSentAmounts {
-            expected: format!("({}, {})", amount0, amount1),
-            got: format!("({}, {})", amount0_got, amount1_got),
-        });
-    }
 
     let new_holder = deps
         .api
@@ -261,7 +248,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     }
 
     let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
-        // Invariant: Wont overflow, because full range balances will always be
+        // Invariant: Wont underflow, because full range balances will always be
         //            lower than the total balanced balances (see `calc_x0`).
         let base_range_balance0 = balanced_balance0.checked_sub(full_range_balance0).unwrap();
         let base_range_balance1 = balanced_balance1.checked_sub(full_range_balance1).unwrap();

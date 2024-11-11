@@ -284,10 +284,7 @@ pub struct VaultInfo {
 impl VaultInfo {
     pub fn new(info: VaultInfoInstantiateMsg, deps: Deps) -> Result<Self, InstantiationError> {
         use InstantiationError::*;
-        let pool_id =
-            PoolId::new(info.pool_id, &deps.querier).ok_or(InvalidPoolId(info.pool_id))?;
-
-        assert!(pool_id.0 == info.pool_id);
+        let pool_id = PoolId::new(info.pool_id, &deps.querier).ok_or(InvalidPoolId(info.pool_id))?;
 
         let rebalancer = VaultRebalancer::new(info.rebalancer, deps)?;
 
