@@ -214,10 +214,10 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         assert!(!balanced_balance0.is_zero() && !balanced_balance1.is_zero());
         assert!(!bal0.is_zero() && !bal1.is_zero());
 
-        let balances_price = balanced_balance1 / balanced_balance0;
-        // Invariant: The difference between prices should be atomic, as `utils::calc_x0`
-        //            already ensures that the proportions hold. We still take one
-        //            atom to compensate for roundings.
+        let balances_price = balanced_balance1.checked_div(balanced_balance0).unwrap();
+        // Invariant: The difference between prices should be atomic, as we already
+        //            ensure the balanced balances are in the right proportion during
+        //            their calculation.
         assert_approx_eq!(balances_price, price, Decimal::one());
     }
 

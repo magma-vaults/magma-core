@@ -142,450 +142,15 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
 }
 
 #[cfg(test)]
-mod test {
+pub mod test {
+
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, PositionBalancesWithFeesResponse, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{PositionType, ProtocolFee, VaultCreationCost}, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::MIN_LIQUIDITY, mock::mock::{deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM, USDC_DENOM}, msg::{DepositMsg, WithdrawMsg}, state::PositionType, utils::price_function_inv};
 
     use super::*;
-    use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
-    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{
-        concentratedliquidity::v1beta1::{
-            CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord
-        }, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}}
-    ;
-    use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
-
-    const USDC_DENOM: &str = VAULT_CREATION_COST_DENOM;
-    const OSMO_DENOM: &str = "uosmo";
-
-    struct PoolMockup {
-        pool_id: u64,
-        app: OsmosisTestApp,
-        deployer: SigningAccount,
-        user1: SigningAccount,
-        user2: SigningAccount,
-        _price: Decimal,
-    }
-
-    impl PoolMockup {
-        fn new(usdc_in: u128, osmo_in: u128) -> Self {
-            let app = OsmosisTestApp::new();
-            
-            let init_coins = &[
-                Coin::new(1_000_000_000_000u128, USDC_DENOM),
-                Coin::new(1_000_000_000_000u128, OSMO_DENOM),
-            ];
-
-            let mut accounts = app.init_accounts(init_coins, 3).unwrap().into_iter();
-            let deployer = accounts.next().unwrap();
-            let user1 = accounts.next().unwrap();
-            let user2 = accounts.next().unwrap();
-
-            let cl = ConcentratedLiquidity::new(&app);
-            let gov = GovWithAppAccess::new(&app);
-
-            // Pool setup.
-            gov.propose_and_execute(
-                CreateConcentratedLiquidityPoolsProposal::TYPE_URL.to_string(),
-                CreateConcentratedLiquidityPoolsProposal {
-                    title: "Create cl uosmo:usdc pool".into(),
-                    description: "blabla".into(),
-                    pool_records: vec![PoolRecord {
-                        denom0: USDC_DENOM.into(),
-                        denom1: OSMO_DENOM.into(),
-                        tick_spacing: 100,
-                        spread_factor: Decimal::from_str("0.01").unwrap().atomics().into()
-                    }]
-                },
-                deployer.address(),
-                &deployer,
-            )
-            .unwrap();
-
-            // NOTE: Could fail if we test multiple pools.
-            let pool_id = 1;
-
-            let position_res = cl
-                .create_position(
-                    MsgCreatePosition {
-                        pool_id,
-                        sender: deployer.address(),
-                        lower_tick: MIN_TICK.into(),
-                        upper_tick: MAX_TICK.into(),
-                        tokens_provided: vec![
-                            Coin::new(usdc_in, USDC_DENOM).into(),
-                            Coin::new(osmo_in, OSMO_DENOM).into(),
-                        ],
-                        token_min_amount0: usdc_in.to_string(),
-                        token_min_amount1: osmo_in.to_string(),
-                    },
-                    &deployer,
-                )
-                .unwrap()
-                .data;
-
-            // NOTE: Could fail if we test multiple positions.
-            assert_eq!(position_res.position_id, 1);
-            app.increase_time(TWAP_SECONDS);
-
-            let _price = Decimal::new(osmo_in.into()) / Decimal::new(usdc_in.into());
-
-            Self {
-                pool_id, app, deployer, user1, user2, _price
-            }
-        }
-
-        fn swap_osmo_for_usdc(&self, from: &SigningAccount, osmo_in: u128) -> anyhow::Result<Uint128> {
-            let pm = PoolManager::new(&self.app);
-            let usdc_got = pm.swap_exact_amount_in(
-                MsgSwapExactAmountIn {
-                    sender: from.address(),
-                    routes: vec![SwapAmountInRoute {
-                        pool_id: self.pool_id,
-                        token_out_denom: USDC_DENOM.into(),
-                    }],
-                    token_in: Some(Coin::new(osmo_in, OSMO_DENOM).into()),
-                    token_out_min_amount: "1".into(),
-                },
-                from
-            )
-                .map(|x| x.data.token_out_amount)
-                .map(|amount| Uint128::from_str(&amount).unwrap());
-
-            Ok(usdc_got?)
-        }
-
-        fn swap_usdc_for_osmo(&self, from: &SigningAccount, usdc_in: u128) -> anyhow::Result<Uint128> {
-            let pm = PoolManager::new(&self.app);
-            let usdc_got = pm.swap_exact_amount_in(
-                MsgSwapExactAmountIn {
-                    sender: from.address(),
-                    routes: vec![SwapAmountInRoute {
-                        pool_id: self.pool_id,
-                        token_out_denom: OSMO_DENOM.into(),
-                    }],
-                    token_in: Some(Coin::new(usdc_in, USDC_DENOM).into()),
-                    token_out_min_amount: "1".into(),
-                },
-                from
-            )
-                .map(|x| x.data.token_out_amount)
-                .map(|amount| Uint128::from_str(&amount).unwrap());
-
-            Ok(usdc_got?)
-        }
-
-        fn osmo_balance_query(&self, address: &str) -> Uint128 {
-            let bank = Bank::new(&self.app);
-            let amount = bank.query_balance(&QueryBalanceRequest{
-                address: address.into(),
-                denom: OSMO_DENOM.into()
-            }).unwrap().balance.unwrap().amount;
-            Uint128::from_str(&amount).unwrap()
-        }
-
-        fn usdc_balance_query(&self, address: &str) -> Uint128 {
-            let bank = Bank::new(&self.app);
-            let amount = bank.query_balance(&QueryBalanceRequest{
-                address: address.into(),
-                denom: USDC_DENOM.into()
-            }).unwrap().balance.unwrap().amount;
-            Uint128::from_str(&amount).unwrap()
-        }
-    }
-
-    fn store_vaults_code(wasm: &Wasm<OsmosisTestApp>, deployer: &SigningAccount) -> u64 {
-        let contract_bytecode =
-            std::fs::read("target/wasm32-unknown-unknown/release/magma_core.wasm").unwrap();
-
-        wasm.store_code(&contract_bytecode, None, deployer)
-            .unwrap()
-            .data
-            .code_id
-    }
-
-    fn vault_params(base: &str, limit: &str, full: &str) -> VaultParametersInstantiateMsg {
-        VaultParametersInstantiateMsg {
-            full_range_weight: Decimal::from_str(full).unwrap().atomics(),
-            base_factor: Decimal::from_str(base).unwrap().atomics(),
-            limit_factor: Decimal::from_str(limit).unwrap().atomics(),
-        }
-    }
-
-    fn rebalancer_anyone(price_factor_before_rebalance: &str, seconds_before_rebalance: u32) -> VaultRebalancerInstantiateMsg {
-        VaultRebalancerInstantiateMsg::Anyone { 
-            price_factor_before_rebalance: Decimal::from_str(price_factor_before_rebalance).unwrap().atomics(),
-            seconds_before_rebalance
-        }
-    }
-
-    fn deposit_msg<T: ToString>(to: T) -> ExecuteMsg {
-        ExecuteMsg::Deposit(DepositMsg { 
-            amount0_min: Uint128::zero(),
-            amount1_min: Uint128::zero(),
-            to: to.to_string()
-        })
-    }
-
-    struct VaultMockup<'a> {
-        vault_addr: Addr,
-        wasm: Wasm<'a, OsmosisTestApp>
-    }
-
-    impl VaultMockup<'_> {
-        fn new(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> VaultMockup {
-            Self::new_with_rebalancer(pool_info, params, VaultRebalancerInstantiateMsg::Admin {})
-        }
-
-        fn new_with_rebalancer(
-            pool_info: &PoolMockup,
-            params: VaultParametersInstantiateMsg,
-            rebalancer: VaultRebalancerInstantiateMsg
-        ) -> VaultMockup {
-            let wasm = Wasm::new(&pool_info.app);
-            let code_id = store_vaults_code(&wasm, &pool_info.deployer);
-            let api = mock_dependencies().api;
-
-            let usdc_fee = Coin::new(VaultCreationCost::default().0.into(), USDC_DENOM);
-            let vault_addr = wasm
-                .instantiate(
-                    code_id,
-                    &InstantiateMsg {
-                        vault_info: VaultInfoInstantiateMsg {
-                            pool_id: pool_info.pool_id,
-                            vault_name: "My USDC/OSMO vault".into(),
-                            vault_symbol: "USDCOSMOV".into(),
-                            admin: Some(pool_info.deployer.address()),
-                            admin_fee: ProtocolFee::default().0.0.atomics(),
-                            rebalancer
-                        },
-                        vault_parameters: params,
-                    },
-                    None,
-                    Some("my vault"),
-                    &[usdc_fee],
-                    &pool_info.deployer,
-                )
-                .unwrap()
-                .data
-                .address;
-
-            let vault_addr = api.addr_validate(&vault_addr).unwrap();
-
-            VaultMockup { vault_addr, wasm }
-
-        }
-
-        fn deposit(
-            &self,
-            usdc: u128,
-            osmo: u128,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            let (amount0, amount1) = (usdc, osmo);
-
-            let execute_msg = &deposit_msg(from.address());
-            let coin0 = Coin::new(amount0, USDC_DENOM);
-            let coin1 = Coin::new(amount1, OSMO_DENOM);
-
-            if amount0 == 0 && amount1 == 0 {
-                unimplemented!()
-            } else if amount0 == 0 {
-                Ok(self.wasm.execute(
-                    self.vault_addr.as_ref(),
-                    execute_msg,
-                    &[coin1],
-                    from
-                )?)
-            } else if amount1 == 0 {
-                Ok(self.wasm.execute(
-                    self.vault_addr.as_ref(),
-                    execute_msg,
-                    &[coin0],
-                    from
-                )?)
-            } else {
-                Ok(self.wasm.execute(
-                    self.vault_addr.as_ref(),
-                    execute_msg,
-                    &[coin0, coin1],
-                    from
-                )?)
-            }
-        }
-
-        fn rebalance(
-            &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(), &ExecuteMsg::Rebalance {}, &[], from
-            )?)
-        }
-
-        fn withdraw(
-            &self,
-            shares: Uint128,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::Withdraw(WithdrawMsg{
-                    shares,
-                    amount0_min: Uint128::zero(),
-                    amount1_min: Uint128::zero(),
-                    to: from.address()
-                }),
-                &[],
-                from
-            )?)
-        }
-
-        fn admin_withdraw(
-            &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref()   ,
-                &ExecuteMsg::WithdrawAdminFees {},
-                &[],
-                from
-            )?)
-        }
-
-        fn protocol_withdraw(
-            &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref()   ,
-                &ExecuteMsg::WithdrawProtocolFees {},
-                &[],
-                from
-            )?)
-        }
-
-        fn propose_new_admin(
-            &self,
-            from: &SigningAccount,
-            new: Option<&SigningAccount>
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::ProposeNewAdmin { new_admin: new.map(|x| x.address()) },
-                &[],
-                from
-            )?)
-        }
-        
-        fn accept_new_admin(
-            &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::AcceptNewAdmin {},
-                &[],
-                from
-            )?)
-        }
-
-        fn burn_vault_admin(
-            &self,
-            from: &SigningAccount
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::BurnVaultAdmin {},
-                &[],
-                from
-            )?)
-        }
-
-        fn change_vault_rebalancer(
-            &self,
-            from: &SigningAccount,
-            new_rebalancer: VaultRebalancerInstantiateMsg
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::ChangeVaultRebalancer(new_rebalancer),
-                &[],
-                from
-            )?)
-        }
-
-        fn change_vault_parameters(
-            &self,
-            from: &SigningAccount,
-            new_paramerers: VaultParametersInstantiateMsg
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::ChangeVaultParameters(new_paramerers),
-                &[],
-                from
-            )?)
-        }
-
-        fn change_admin_fee(
-            &self,
-            from: &SigningAccount,
-            new_fee: &str
-        ) -> anyhow::Result<ExecuteResponse<MsgExecuteContractResponse>> {
-            Ok(self.wasm.execute(
-                self.vault_addr.as_ref(),
-                &ExecuteMsg::ChangeAdminFee { new_admin_fee: Decimal::from_str(new_fee).unwrap().atomics() },
-                &[],
-                from
-            )?)
-        }
-
-        fn vault_balances_query(&self) -> VaultBalancesResponse {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::VaultBalances { }
-            ).unwrap()
-        }
-
-        fn position_balances_query(&self, position_type: PositionType) -> PositionBalancesWithFeesResponse {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::PositionBalancesWithFees { position_type },
-            ).unwrap()
-        }
-
-        fn token_info_query(&self) -> TokenInfo {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::TokenInfo {  }
-            ).unwrap()
-        }
-
-        fn shares_query(&self, address: &str) -> Uint128 {
-            let res: cw20::BalanceResponse = self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::Balance { address: address.into() }
-            ).unwrap();
-            res.balance
-        }
-
-        fn vault_state_query(&self) -> VaultState {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::VaultState {}
-            ).unwrap()
-        }
-
-        fn vault_fees_query(&self) -> FeesInfo {
-            self.wasm.query(
-                self.vault_addr.as_ref(),
-                &QueryMsg::FeesInfo {}
-            ).unwrap()
-        }
-    }
-
+    use cosmwasm_std::{coin, Coin, Decimal};
+    use osmosis_test_tube::Account;
 
     #[test]
     fn price_function_inv_test() {
@@ -605,8 +170,7 @@ mod test {
         ];
 
         let ticks = &[
-            -9000200, -9000100, -500200, -500100, -200, -100, 0, 100, 200, 8999900, 9000100,
-            9000200,
+            -9000200, -9000100, -500200, -500100, -200, -100, 0, 100, 200, 8999900, 9000100, 9000200
         ];
 
         for (p, expected_tick) in prices.iter().zip(ticks.iter()) {
@@ -614,7 +178,6 @@ mod test {
             assert_eq!(*expected_tick, got_tick)
         }
     }
-
 
     #[test]
     fn normal_rebalances() {
@@ -689,7 +252,7 @@ mod test {
 
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
-        // FIXME: See issue #1.
+        // FIXME: See issue #1. (FIXME What was this again? issue #1 links to a PR.
         // assert!(vault_mockup.vault_state_query().limit_position_id.is_none());
         // assert!(vault_mockup.vault_state_query().full_range_position_id.is_none());
         // assert!(vault_mockup.vault_state_query().base_position_id.is_none());
@@ -945,9 +508,8 @@ mod test {
 
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user1).is_err());
         assert!(vault_mockup.admin_withdraw(&pool_mockup.user2).is_err());
-        let x = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
+        let _x = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
         let _y = vault_mockup.admin_withdraw(&pool_mockup.deployer).unwrap();
-        println!("{:?}", x);
         // TODO Check if the transaction indeed sends some tokens back.
 
         let fees = vault_mockup.vault_fees_query();
@@ -1021,9 +583,7 @@ mod test {
         vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
 
         let bals = vault_mockup.vault_balances_query();
-        println!("{:?}", bals);
         let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
-        println!("{:?}", shares);
     }
 
     #[test]
@@ -1052,7 +612,6 @@ mod test {
     #[test]
     fn public_first_rebalancing() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
-        // FIXME: Typo.
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
@@ -1065,18 +624,17 @@ mod test {
     #[test]
     fn public_rebalancing_at_due_time() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
-        // FIXME: Typo.
-        let seconds_before_rabalance = 3600;
+        let seconds_before_rebalance = 3600;
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
-            rebalancer_anyone("1", seconds_before_rabalance)
+            rebalancer_anyone("1", seconds_before_rebalance)
         );
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.user2).unwrap();
 
         // Hypothesis: `6` as each operation takes 3 seconds.
-        pool_mockup.app.increase_time((seconds_before_rabalance - 6).into());
+        pool_mockup.app.increase_time((seconds_before_rebalance - 6).into());
         assert!(vault_mockup.rebalance(&pool_mockup.user1).is_err());
         assert!(vault_mockup.rebalance(&pool_mockup.deployer).is_err());
         vault_mockup.rebalance(&pool_mockup.user1).unwrap();
@@ -1086,7 +644,6 @@ mod test {
     #[test]
     fn public_rebalancing_after_price_moved() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
-        // FIXME: Typo.
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
             vault_params("2", "1.45", "0.55"),
@@ -1145,7 +702,6 @@ mod test {
     #[test]
     fn timestamp_operations_wont_panic_for_large_values() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
-        // FIXME: Typo.
         let seconds_before_rebalance = u32::MAX;
         let vault_mockup = VaultMockup::new_with_rebalancer(
             &pool_mockup,
