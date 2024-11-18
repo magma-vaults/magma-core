@@ -73,6 +73,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
         // Invariant: Any state is present after instantiation.
         VaultState {} => to_json_binary(&VAULT_STATE.load(deps.storage).unwrap()),
+        VaultParameters {} => to_json_binary(&VAULT_PARAMETERS.load(deps.storage).unwrap()),
         VaultInfo {} => to_json_binary(&VAULT_INFO.load(deps.storage).unwrap()),
         FeesInfo {} => to_json_binary(&FEES_INFO.load(deps.storage).unwrap()),
         TokenInfo {} => to_json_binary(&query_token_info(deps)?),
@@ -150,7 +151,7 @@ pub mod test {
 
     use super::*;
     use cosmwasm_std::{coin, Coin, Decimal};
-    use osmosis_test_tube::Account;
+    use osmosis_test_tube::{Account, ConcentratedLiquidity, Module, OsmosisTestApp};
 
     #[test]
     fn price_function_inv_test() {
@@ -770,5 +771,55 @@ pub mod test {
         assert!(limit_bals.bal0.is_zero());
         // 5_000 tokens out of proportion, -1 atom.
         assert_eq!(limit_bals.bal1, Uint128::new(4999));
+    }
+
+    /// We will create a vault with only a limit position. Then the price will
+    /// move enough to make the vault reserves balanced. Thus, at that point,
+    /// rebalancing wont produce any limit positions. For this computation:
+    /// 1. Observe that a limit position in [p/k, p] will only be balanced
+    ///    if price moves to p/sqrt(k) (geometric mean). Dualy, a limit position
+    ///    in [p, pk] will only be balanced if the price moves to p*sqrt(k).
+    /// 2. Observe that we can trivially know the liquidity at any given range.
+    ///    Because our liqudity pool will only have 2 positions, the computations
+    ///    are even easier.
+    /// 3. Finally, we can compute the reserve deltas sufficient to move the
+    ///    price to our desired endpoints.
+    #[test]
+    fn from_limit_position_to_balanced_one() {
+        let pool_mockup = PoolMockup::new_with_spread(200_000, 100_000, "0");
+        let full_range_liquidity = pool_mockup
+            .position_liquidity(pool_mockup.initial_position_id)
+            .unwrap();
+
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "2", "0.55"));
+        vault_mockup.deposit(0, 50_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        let position_ids = vault_mockup.vault_state_query();
+        assert!(position_ids.full_range_position_id.is_none());
+        assert!(position_ids.base_position_id.is_none());
+        assert!(position_ids.limit_position_id.is_some());
+
+        let VaultParameters { limit_factor, .. } = vault_mockup.vault_parameters_query();
+
+        let target_price = pool_mockup.price / limit_factor.0.sqrt();
+        let limit_liquidity = pool_mockup
+            .position_liquidity(position_ids.limit_position_id.unwrap())
+            .unwrap();
+
+        let liquidity = full_range_liquidity + limit_liquidity;
+        let delta_x = liquidity * (
+            Decimal::one()/target_price.sqrt() - Decimal::one()/pool_mockup.price.sqrt()
+        );
+        let delta_x = delta_x.to_uint_floor();
+
+        // NOTE: We subtract 1 for atomic reasons.
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user2, delta_x.u128() - 1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        let position_ids = vault_mockup.vault_state_query();
+        assert!(position_ids.full_range_position_id.is_some());
+        assert!(position_ids.base_position_id.is_some());
+        assert!(position_ids.limit_position_id.is_none());
     }
 }

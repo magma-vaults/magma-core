@@ -1,15 +1,14 @@
-
-#[cfg(test)]
+#[cfg(any(test, feature = "fuzzing"))]
 pub mod mock {
     use std::str::FromStr;
     use anyhow::Result;
 
     use cosmwasm_std::{testing::mock_dependencies, Addr, Api, Coin, Decimal, Uint128};
     use cw20_base::state::TokenInfo;
-    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{concentratedliquidity::v1beta1::{CreateConcentratedLiquidityPoolsProposal, MsgCreatePosition, PoolRecord}, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}};
+    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{concentratedliquidity::v1beta1::{CreateConcentratedLiquidityPoolsProposal, FullPositionBreakdown, MsgCreatePosition, PoolRecord, PositionByIdRequest}, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}};
     use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
 
-    use crate::{constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, ExecuteMsg, InstantiateMsg, PositionBalancesWithFeesResponse, QueryMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{FeesInfo, PositionType, ProtocolFee, VaultCreationCost, VaultState}};
+    use crate::{constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, ExecuteMsg, InstantiateMsg, PositionBalancesWithFeesResponse, QueryMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{FeesInfo, PositionType, ProtocolFee, VaultCreationCost, VaultParameters, VaultState}};
 
     // TODO: Ideally abstract those 2, so the tests dev doesnt has to keep
     // track of whats in the pool.
@@ -18,6 +17,7 @@ pub mod mock {
     
     pub struct PoolMockup {
         pub pool_id: u64,
+        pub initial_position_id: u64,
         pub app: OsmosisTestApp,
         pub deployer: SigningAccount,
         pub user1: SigningAccount,
@@ -26,7 +26,7 @@ pub mod mock {
     }
 
     impl PoolMockup {
-        pub fn new(usdc_in: u128, osmo_in: u128) -> Self {
+        pub fn new_with_spread(usdc_in: u128, osmo_in: u128, spread_factor: &str) -> Self {
             let app = OsmosisTestApp::new();
             
             let init_coins = &[
@@ -51,8 +51,8 @@ pub mod mock {
                     pool_records: vec![PoolRecord {
                         denom0: USDC_DENOM.into(),
                         denom1: OSMO_DENOM.into(),
-                        tick_spacing: 100,
-                        spread_factor: Decimal::from_str("0.01").unwrap().atomics().into()
+                        tick_spacing: 30,
+                        spread_factor: Decimal::from_str(spread_factor).unwrap().atomics().into()
                     }]
                 },
                 deployer.address(),
@@ -60,8 +60,9 @@ pub mod mock {
             )
             .unwrap();
 
-            // NOTE: Could fail if we test multiple pools.
+            // NOTE: Could fail if we test multiple pools/positions.
             let pool_id = 1;
+            let initial_position_id = 1;
 
             let position_res = cl
                 .create_position(
@@ -89,8 +90,13 @@ pub mod mock {
             let price = Decimal::new(osmo_in.into()) / Decimal::new(usdc_in.into());
 
             Self {
-                pool_id, app, deployer, user1, user2, price
+                pool_id, initial_position_id, app, deployer, user1, user2, price
             }
+            
+        }
+
+        pub fn new(usdc_in: u128, osmo_in: u128) -> Self {
+            Self::new_with_spread(usdc_in, osmo_in, "0.01")
         }
 
         pub fn swap_osmo_for_usdc(&self, from: &SigningAccount, osmo_in: u128) -> Result<Uint128> {
@@ -149,6 +155,21 @@ pub mod mock {
                 denom: USDC_DENOM.into()
             }).unwrap().balance.unwrap().amount;
             Uint128::from_str(&amount).unwrap()
+        }
+
+        pub fn position_query(&self, position_id: u64) -> Result<FullPositionBreakdown> {
+            let cl = ConcentratedLiquidity::new(&self.app);
+            let pos = cl.query_position_by_id(&PositionByIdRequest { position_id })?;
+            Ok(pos.position.expect("oops"))
+        }
+
+        pub fn position_liquidity(&self, position_id: u64) -> Result<Decimal> {
+            let pos = self.position_query(position_id)?;
+            let liq = pos.position
+                .map(|x| Uint128::from_str(&x.liquidity))
+                .expect("oops")
+                .map(|x| Decimal::raw(x.u128()))?;
+            Ok(liq)
         }
     }
 
@@ -433,6 +454,13 @@ pub mod mock {
             self.wasm.query(
                 self.vault_addr.as_ref(),
                 &QueryMsg::VaultState {}
+            ).unwrap()
+        }
+
+        pub fn vault_parameters_query(&self) -> VaultParameters {
+            self.wasm.query(
+                self.vault_addr.as_ref(),
+                &QueryMsg::VaultParameters {}
             ).unwrap()
         }
 

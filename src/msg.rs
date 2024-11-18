@@ -1,7 +1,7 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
 use cw20::{BalanceResponse, Expiration, TokenInfoResponse};
-use crate::state::{FeesInfo, PositionType, VaultInfo, VaultState};
+use crate::state::{FeesInfo, PositionType, VaultInfo, VaultParameters, VaultState};
 
 #[cw_serde]
 pub struct VaultParametersInstantiateMsg {
@@ -107,6 +107,8 @@ pub enum QueryMsg {
     Balance { address: String },
     #[returns(VaultState)]
     VaultState {},
+    #[returns(VaultParameters)]
+    VaultParameters {},
     #[returns(TokenInfoResponse)]
     TokenInfo {},
     #[returns(VaultInfo)]
