@@ -1,9 +1,14 @@
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Reply, Response,
-    StdResult, Uint128
+    StdResult, Uint128,
 };
-use cw20_base::allowances::{execute_burn_from, execute_decrease_allowance, execute_increase_allowance, execute_send_from, execute_transfer_from};
-use cw20_base::contract::{execute_burn, execute_send, execute_transfer, query_balance, query_token_info};
+use cw20_base::allowances::{
+    execute_burn_from, execute_decrease_allowance, execute_increase_allowance, execute_send_from,
+    execute_transfer_from, query_allowance,
+};
+use cw20_base::contract::{
+    execute_burn, execute_send, execute_transfer, query_balance, query_token_info,
+};
 use cw20_base::state::{MinterData, TokenInfo, TOKEN_INFO};
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositionResponse;
 
@@ -58,19 +63,13 @@ pub fn instantiate(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use QueryMsg::*;
     match msg {
+        PositionBalancesWithFees { position_type } => 
+            to_json_binary( &query::position_balances_with_fees(position_type, deps),),
+        CalcSharesAndUsableAmounts { for_amount0, for_amount1, } => 
+            to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, deps)),
         VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
-        PositionBalancesWithFees { position_type } => to_json_binary(
-            &query::position_balances_with_fees(position_type, deps),
-        ),
-        CalcSharesAndUsableAmounts {
-            for_amount0,
-            for_amount1,
-        } => to_json_binary(&query::calc_shares_and_usable_amounts(
-            for_amount0,
-            for_amount1,
-            deps
-        )),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
+        Allowance { owner, spender } => to_json_binary(&query_allowance(deps, owner, spender)?),
         // Invariant: Any state is present after instantiation.
         VaultState {} => to_json_binary(&VAULT_STATE.load(deps.storage).unwrap()),
         VaultParameters {} => to_json_binary(&VAULT_PARAMETERS.load(deps.storage).unwrap()),

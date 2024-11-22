@@ -1,6 +1,6 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::{Binary, Uint128};
-use cw20::{BalanceResponse, Expiration, TokenInfoResponse};
+use cw20::{AllowanceResponse, BalanceResponse, Expiration, TokenInfoResponse};
 use crate::state::{FeesInfo, PositionType, VaultInfo, VaultParameters, VaultState};
 
 #[cw_serde]
@@ -105,6 +105,8 @@ pub enum QueryMsg {
     CalcSharesAndUsableAmounts { for_amount0: Uint128, for_amount1: Uint128 },
     #[returns(BalanceResponse)]
     Balance { address: String },
+    #[returns(AllowanceResponse)]
+    Allowance { owner: String, spender: String },
     #[returns(VaultState)]
     VaultState {},
     #[returns(VaultParameters)]
