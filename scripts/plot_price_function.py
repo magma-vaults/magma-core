@@ -20,15 +20,31 @@ def gen_p_inv(epsilon: float) -> Callable[[float], int] | None:
 def osmo_p(t: int):
     d = 9e6
     f = floor(t/d)
-    return 10**f + (t - d*f)*10**(f-6)
-
-print(osmo_p(-108_000_000))
+    return 10**f + (10**(f-6)) * (t - d*f)
 
 def osmo_p_inv(p: float) -> int | None:
     if p < 0: return None
     z = floor(log10(p))
     return round(10**(6-z)*(p + (9*z - 1)*10**z))
 
+print(osmo_p_inv(1/(10**18)))
+print(osmo_p_inv(2**128 - 1))
+print(osmo_p_inv((2**128 - 1)/(10**18)))
+
+MIN_TICK = -108_000_000
+MAX_TICK = 342_000_000
+
+def explore():
+    iter_count = MAX_TICK + abs(MIN_TICK)
+    for t in range(MIN_TICK, MIN_TICK + 11):
+        expected = t
+        p = osmo_p(t)
+        got = osmo_p_inv(p)
+        # print(f"Done {(t - MIN_TICK)/iter_count}")
+        print(expected, got, p)
+        if expected != got: assert(false)
+
+            
 def test_inv():
     osmo_p_inv_test_cases = {
         0.099998: -9000200,
@@ -53,12 +69,12 @@ def test_inv():
 
 def plot_prices():
     plt.subplot(1, 2, 1)
-    xs1 = np.linspace(0, 800_000, 1_000_000)
-    plt.plot(xs1, list(map(p, xs1)))
+    ticks = np.linspace(MIN_TICK, MAX_TICK, 1_000_000)
+    plt.plot(ticks, list(map(osmo_p, ticks)))
 
     plt.subplot(1, 2, 2)
-    xs2 = np.linspace(0, 100_000_000, 1_000_000)
-    plt.plot(xs2, list(map(osmo_p, xs2)))
+    prices = np.logspace(-18, 20, num=50, endpoint=True, base=10.0, dtype=None, axis=0)
+    plt.plot(prices, list(map(osmo_p_inv, prices)))
     plt.show()
 
-
+plot_prices()

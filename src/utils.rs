@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use cosmwasm_std::{Decimal, Decimal256, Int128, SignedDecimal256, Uint128};
+use cosmwasm_std::{Decimal, Decimal256, Int128, Int256, SignedDecimal, SignedDecimal256, Uint128};
 use crate::state::{PositiveDecimal, PriceFactor, Weight};
 
 /// Used to chain anyhow::Result computations without closure boilerplate.
@@ -100,6 +100,20 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
     //        properly formalize it in doc or a whitepaper.
     compute_price_inverse(p).unwrap()
 }
+
+pub fn maybe_neg_pow(exp: i32) -> Option<SignedDecimal256> {
+    let ten = SignedDecimal256::from_str("10").unwrap();
+    if exp >= 0 {
+        // Invariant: We just verified that `exp` is unsigned.
+        let exp: u32 = exp.try_into().unwrap();
+        ten.checked_pow(exp).ok()
+    } else {
+        SignedDecimal256::one()
+            .checked_div(ten.checked_pow(exp.unsigned_abs()).ok()?)
+            .ok()
+    }
+}
+
 
 /// # Arguments
 ///

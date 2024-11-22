@@ -147,10 +147,10 @@ pub mod test {
 
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::MIN_LIQUIDITY, mock::mock::{deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM, USDC_DENOM}, msg::{DepositMsg, WithdrawMsg}, state::PositionType, utils::price_function_inv};
+    use crate::{assert_approx_eq, constants::{MAX_TICK, MIN_LIQUIDITY, MIN_TICK}, mock::mock::{deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM, USDC_DENOM}, msg::{DepositMsg, WithdrawMsg}, state::PositionType, utils::{maybe_neg_pow, price_function_inv}};
 
     use super::*;
-    use cosmwasm_std::{coin, Coin, Decimal};
+    use cosmwasm_std::{coin, Coin, Decimal, Int128, SignedDecimal256};
     use osmosis_test_tube::{Account, ConcentratedLiquidity, Module, OsmosisTestApp};
 
     #[test]
@@ -821,5 +821,31 @@ pub mod test {
         assert!(position_ids.full_range_position_id.is_some());
         assert!(position_ids.base_position_id.is_some());
         assert!(position_ids.limit_position_id.is_none());
+    }
+
+    pub fn price_function(tick: i32) -> Decimal {
+        let t = SignedDecimal256::from_str(&tick.to_string()).unwrap();
+        let exp6 = SignedDecimal256::from_str("10").unwrap().pow(6);
+        let nine = SignedDecimal256::from_str("9").unwrap();
+
+        let x = nine * (t/(nine * exp6)).floor() - SignedDecimal256::one();
+        let x = t - exp6*x;
+        let arg = (t / (nine * exp6)) - SignedDecimal256::from_str("6").unwrap();
+        let arg: Int128 = arg.floor().to_int_trunc().try_into().unwrap();
+        let arg: i32 = arg.i128().try_into().unwrap();
+        let pw = maybe_neg_pow(arg).unwrap();
+        println!("x: {}, pw: {}, arg: {}", x, pw, arg);
+        let x = x * pw;
+        x.try_into().unwrap()
+    }
+
+    #[test]
+    fn brute_force() {
+        for t in MIN_TICK..=MAX_TICK {
+            let p = price_function(t);
+            let i = price_function_inv(&p);
+            assert_eq!(t, i);
+            println!("current tick: {}, got tick: {}, price: {}", t, i, p.to_string());
+        }
     }
 }
