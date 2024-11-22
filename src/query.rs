@@ -4,7 +4,14 @@ use cosmwasm_std::{Deps, Uint128, Uint256};
 use cw20_base::state::TOKEN_INFO;
 use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::PositionByIdRequest;
 
-use crate::{constants::MIN_LIQUIDITY, do_me, do_ok, msg::{CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse}, state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE}};
+use crate::{
+    constants::MIN_LIQUIDITY,
+    do_me, do_ok,
+    msg::{
+        CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse,
+    },
+    state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE},
+};
 
 /// Partition available balances to the vault in 3 sets:
 /// - Balances available for business logic, e.g., for creating new positions.
@@ -265,3 +272,4 @@ pub fn calc_shares_and_usable_amounts(
         }.unwrap()
     }
 }
+

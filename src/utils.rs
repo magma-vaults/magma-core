@@ -60,9 +60,9 @@ pub fn raw<T: From<Uint128>>(d: &Decimal) -> T {
     d.atomics().into()
 }
 
-// TODO: Prove downgrade to i32 is safe.
-/// Generalized inverse of Osmosis price function. Thus, it will
-/// map each price to its closest tick.
+/// Generalized inverse of Osmosis price function. Ie, it 
+/// maps each price to its closest tick. Read whitepaper
+/// for further clarification.
 pub fn price_function_inv(p: &Decimal) -> i32 {
     let maybe_neg_pow = |exp: i32| {
         let ten = SignedDecimal256::from_str("10").unwrap();
@@ -95,9 +95,6 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
         x.i128().try_into().ok()
     };
 
-    // Invariant: Wont overflow/underflow under i256.
-    // Proof: I have the proof in a obsidian note, TODO I need to
-    //        properly formalize it in doc or a whitepaper.
     compute_price_inverse(p).unwrap()
 }
 
@@ -106,14 +103,14 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
 /// * `k` - Price factor for the base range position.
 /// * `w` - Weight for the full range position.
 /// * `x` - Amount of token0 to be used for the full range position
-///         and the base one. Thus, `y = p*x`.
+///         and the base one. Ie, the balanced amount of token0 (`y = p*x`).
 ///
 /// # Returns
 ///
 /// The amount of token0 `x0` to use in a full range position for
 /// its liquidity to be `w*L`, where `L` is the total liquidity
 /// of both, the full range position, and the base one. Read
-/// whitepaper for further clarification (TODO).
+/// whitepaper for further clarification.
 pub fn calc_x0(k: &PriceFactor, w: &Weight, x: Decimal) -> Decimal {
     if w.is_zero() { return Decimal::zero() }
     // Invariant: Wont overflow.

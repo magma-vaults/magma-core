@@ -1,12 +1,35 @@
 use std::str::FromStr;
 
-use cosmwasm_std::{coin, Addr, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128};
-use cw20_base::{contract::{execute_burn, execute_mint, query_balance, query_token_info}, state::TOKEN_INFO};
-use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest};
+use cosmwasm_std::{
+    coin, Addr, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg,
+    Uint128,
+};
+use cw20_base::{
+    contract::{execute_burn, execute_mint, query_balance, query_token_info},
+    state::TOKEN_INFO,
+};
+use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
+    MsgCollectSpreadRewards, MsgCreatePosition, MsgWithdrawPosition, PositionByIdRequest,
+};
 
 use crate::{
-    assert_approx_eq, constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL, VAULT_CREATION_COST_DENOM}, do_some, error::{AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError}, msg::{CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, query, state::{
-        FundsInfo, PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState, Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE}, utils::{calc_x0, price_function_inv, raw}};
+    assert_approx_eq,
+    constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL, VAULT_CREATION_COST_DENOM},
+    do_some,
+    error::{
+        AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError,
+    },
+    msg::{
+        CalcSharesAndUsableAmountsResponse, DepositMsg, VaultBalancesResponse,
+        VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg,
+    },
+    query,
+    state::{
+        FundsInfo, PositionType, StateSnapshot, VaultParameters, VaultRebalancer, VaultState,
+        Weight, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_PARAMETERS, VAULT_STATE,
+    },
+    utils::{calc_x0, price_function_inv, raw},
+};
 
 pub fn deposit(
     DepositMsg {
@@ -117,7 +140,7 @@ pub fn deposit(
         min_mint.add_attributes(user_mint.attributes)
     };
 
-    // Invariant: Share calculation should will never produce usable amounts 
+    // Invariant: Share calculation will never produce usable amounts 
     //            above actual inputed amounts.
     assert!(amount0_used <= amount0 && amount1_used <= amount1);
 
@@ -172,8 +195,8 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     }
 
     if price.is_zero() {
-        // TODO: If the pool has no price, we should be able to deposit 
-        //       in any proportion. But we dont support that for now.
+        // NOTE: If the pool has no price, we should be able to deposit 
+        //       in any proportion. But we keep things simple for the v1.
         return Err(PoolWithoutPrice(pool_id.0));
     }
 
@@ -240,7 +263,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     } else {
         assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
 
-        let balances_price = full_range_balance1 / full_range_balance0;
+        let balances_price = full_range_balance1.checked_div(full_range_balance0).unwrap();
         // Invariant: The difference between prices should be atomic, as `utils::calc_x0`
         //            already ensures that the proportions hold. We still take one
         //            atom to compensate for roundings.

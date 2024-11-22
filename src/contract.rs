@@ -41,8 +41,8 @@ pub fn instantiate(
         total_supply: Uint128::zero(),
         mint: Some(MinterData {
             minter: env.contract.address,
-            cap: None,
-        }),
+            cap: None
+        })
     };
 
     // Invariant: No state serializaton will panic, as we already ensured
@@ -65,7 +65,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         PositionBalancesWithFees { position_type } => 
             to_json_binary( &query::position_balances_with_fees(position_type, deps),),
-        CalcSharesAndUsableAmounts { for_amount0, for_amount1, } => 
+        CalcSharesAndUsableAmounts { for_amount0, for_amount1 } => 
             to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, deps)),
         VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
@@ -75,7 +75,7 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         VaultParameters {} => to_json_binary(&VAULT_PARAMETERS.load(deps.storage).unwrap()),
         VaultInfo {} => to_json_binary(&VAULT_INFO.load(deps.storage).unwrap()),
         FeesInfo {} => to_json_binary(&FEES_INFO.load(deps.storage).unwrap()),
-        TokenInfo {} => to_json_binary(&query_token_info(deps)?),
+        TokenInfo {} => to_json_binary(&query_token_info(deps)?)
     }
 }
 
@@ -115,9 +115,9 @@ pub fn execute(
         Send { contract, amount, msg } => Ok(execute_send(deps, env, info, contract, amount, msg)?),
         IncreaseAllowance { spender, amount, expires } => Ok(execute_increase_allowance( deps, env, info, spender, amount, expires)?),
         DecreaseAllowance { spender, amount, expires } => Ok(execute_decrease_allowance( deps, env, info, spender, amount, expires)?),
-        TransferFrom { owner, recipient, amount, } => Ok(execute_transfer_from(deps, env, info, owner, recipient, amount)?),
+        TransferFrom { owner, recipient, amount } => Ok(execute_transfer_from(deps, env, info, owner, recipient, amount)?),
         BurnFrom { owner, amount } => Ok(execute_burn_from(deps, env, info, owner, amount)?),
-        SendFrom { owner, contract, amount, msg, } => Ok(execute_send_from( deps, env, info, owner, contract, amount, msg)?),
+        SendFrom { owner, contract, amount, msg } => Ok(execute_send_from( deps, env, info, owner, contract, amount, msg)?)
     }
 }
 
@@ -132,7 +132,7 @@ pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractE
         0 => vault_state.full_range_position_id = Some(new_position.position_id),
         1 => vault_state.base_position_id = Some(new_position.position_id),
         2 => vault_state.limit_position_id = Some(new_position.position_id),
-        _ => unreachable!(),
+        _ => unreachable!() // Invariant: We only use ids 0, 1 and 2.
     };
 
     // Invariant: Wont panic as all types are proper.
@@ -146,11 +146,21 @@ pub mod test {
 
     use std::str::FromStr;
 
-    use crate::{assert_approx_eq, constants::MIN_LIQUIDITY, mock::mock::{deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM, USDC_DENOM}, msg::{DepositMsg, WithdrawMsg}, state::PositionType, utils::price_function_inv};
+    use crate::{
+        assert_approx_eq,
+        constants::MIN_LIQUIDITY,
+        mock::mock::{
+            deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM,
+            USDC_DENOM,
+        },
+        msg::{DepositMsg, WithdrawMsg},
+        state::PositionType,
+        utils::price_function_inv,
+    };
 
     use super::*;
     use cosmwasm_std::{coin, Coin, Decimal};
-    use osmosis_test_tube::{Account, ConcentratedLiquidity, Module, OsmosisTestApp};
+    use osmosis_test_tube::Account;
 
     #[test]
     fn price_function_inv_test() {

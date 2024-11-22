@@ -1,14 +1,37 @@
 #[cfg(any(test, feature = "fuzzing"))]
 pub mod mock {
-    use std::str::FromStr;
     use anyhow::Result;
+    use std::str::FromStr;
 
     use cosmwasm_std::{testing::mock_dependencies, Addr, Api, Coin, Decimal, Uint128};
     use cw20_base::state::TokenInfo;
-    use osmosis_std::types::{cosmos::bank::v1beta1::QueryBalanceRequest, cosmwasm::wasm::v1::MsgExecuteContractResponse, osmosis::{concentratedliquidity::v1beta1::{CreateConcentratedLiquidityPoolsProposal, FullPositionBreakdown, MsgCreatePosition, PoolRecord, PositionByIdRequest}, poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute}}};
-    use osmosis_test_tube::{Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module, OsmosisTestApp, PoolManager, SigningAccount, Wasm};
+    use osmosis_std::types::{
+        cosmos::bank::v1beta1::QueryBalanceRequest,
+        cosmwasm::wasm::v1::MsgExecuteContractResponse,
+        osmosis::{
+            concentratedliquidity::v1beta1::{
+                CreateConcentratedLiquidityPoolsProposal, FullPositionBreakdown, MsgCreatePosition,
+                PoolRecord, PositionByIdRequest,
+            },
+            poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
+        },
+    };
+    use osmosis_test_tube::{
+        Account, Bank, ConcentratedLiquidity, ExecuteResponse, GovWithAppAccess, Module,
+        OsmosisTestApp, PoolManager, SigningAccount, Wasm,
+    };
 
-    use crate::{constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM}, msg::{DepositMsg, ExecuteMsg, InstantiateMsg, PositionBalancesWithFeesResponse, QueryMsg, VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg, WithdrawMsg}, state::{FeesInfo, PositionType, ProtocolFee, VaultCreationCost, VaultParameters, VaultState}};
+    use crate::{
+        constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM},
+        msg::{
+            DepositMsg, ExecuteMsg, InstantiateMsg, PositionBalancesWithFeesResponse, QueryMsg,
+            VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg,
+            VaultRebalancerInstantiateMsg, WithdrawMsg,
+        },
+        state::{
+            FeesInfo, PositionType, ProtocolFee, VaultCreationCost, VaultParameters, VaultState,
+        },
+    };
 
     // TODO: Ideally abstract those 2, so the tests dev doesnt has to keep
     // track of whats in the pool.
