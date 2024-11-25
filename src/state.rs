@@ -16,6 +16,7 @@ use osmosis_std::types::osmosis::{
     concentratedliquidity::v1beta1::Pool, poolmanager::v1beta1::PoolmanagerQuerier,
 };
 use readonly;
+use std::i32;
 use std::{cmp::min_by_key, str::FromStr};
 
 #[cw_serde]
@@ -380,22 +381,23 @@ impl VaultInfo {
             .unwrap()
     }
 
-    // TODO: Document and lift to `i64`, as those computations could panic
-    //       under unreasonable input values. I dont care for that for now,
-    //       I'll just assume `value` is reasonable for now.
     pub fn closest_valid_tick(&self, value: i32, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
 
+        // Invariant: Wont overflow, as `floor(value/spacing) * spacing $\leq$ value`.
         let lower = value
             .checked_div(spacing)
             .and_then(|x| x.checked_mul(spacing))
             .unwrap();
 
+        // Invariant: Could only overflow if the upper closest valid
+        //            tick did not fit in `i32`, in which case we still
+        //            would be using `self.max_valid_tick` (see below).
         let upper = value
             .checked_div(spacing)
             .and_then(|x| x.checked_add(1))
             .and_then(|x| x.checked_mul(spacing))
-            .unwrap();
+            .unwrap_or(i32::MAX);
 
         let closest = min_by_key(lower, upper, |x| (x.checked_sub(value).unwrap()).abs());
 

@@ -113,9 +113,6 @@ pub fn price_function_inv(p: &Decimal) -> i32 {
 /// whitepaper for further clarification.
 pub fn calc_x0(k: &PriceFactor, w: &Weight, x: Decimal) -> Decimal {
     if w.is_zero() { return Decimal::zero() }
-    // Invariant: Wont overflow.
-    // Proof: I have the proof in a obsidian note, TODO I need to
-    //        properly formalize it in doc or a whitepaper.
     do_me! {
         let sqrt_k = k.0.sqrt();
 
