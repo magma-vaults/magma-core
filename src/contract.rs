@@ -148,7 +148,7 @@ pub mod test {
 
     use crate::{
         assert_approx_eq,
-        constants::MIN_LIQUIDITY,
+        constants::{MIN_LIQUIDITY, PROTOCOL_ADDR},
         mock::mock::{
             deposit_msg, rebalancer_anyone, vault_params, PoolMockup, VaultMockup, OSMO_DENOM,
             USDC_DENOM,
@@ -159,7 +159,7 @@ pub mod test {
     };
 
     use super::*;
-    use cosmwasm_std::{coin, Coin, Decimal};
+    use cosmwasm_std::{coin, testing::{mock_dependencies, mock_env}, Addr, Api, Coin, Decimal};
     use osmosis_test_tube::Account;
 
     #[test]
@@ -831,4 +831,14 @@ pub mod test {
         assert!(position_ids.base_position_id.is_some());
         assert!(position_ids.limit_position_id.is_none());
     }
+
+    #[test]
+    fn protocol_address_is_valid() {
+        let a = Addr::unchecked(PROTOCOL_ADDR);
+        let b = mock_dependencies().api.addr_validate(PROTOCOL_ADDR).unwrap();
+        assert_eq!(a, b);
+        let c = Addr::unchecked(PROTOCOL_ADDR.to_uppercase());
+        assert_ne!(a, c);
+    }
+
 }

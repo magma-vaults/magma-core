@@ -1228,7 +1228,6 @@ dependencies = [
  "cw-utils",
  "cw20",
  "cw20-base",
- "once_cell",
  "osmosis-std",
  "osmosis-test-tube",
  "readonly",

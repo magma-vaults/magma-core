@@ -14,7 +14,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
 
 use crate::{
     assert_approx_eq,
-    constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL, VAULT_CREATION_COST_DENOM},
+    constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL_ADDR, VAULT_CREATION_COST_DENOM},
     do_some,
     error::{
         AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError,
@@ -763,7 +763,7 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
     let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
 
     let tx = BankMsg::Send { 
-        to_address: PROTOCOL.to_string(),
+        to_address: PROTOCOL_ADDR.into(),
         amount: vec![
             coin(fees.protocol_tokens0_owned.into(), denom0),
             coin(fees.protocol_tokens1_owned.into(), denom1),
@@ -939,7 +939,7 @@ pub fn change_admin_fee(
 }
 
 fn sender_is_protocol(info: MessageInfo) -> Result<(), ProtocolOperationError> {
-    if *PROTOCOL != info.sender {
+    if Addr::unchecked(PROTOCOL_ADDR) != info.sender {
         Err(ProtocolOperationError::UnauthorizedProtocolAccount(
             info.sender.into()
         ))
