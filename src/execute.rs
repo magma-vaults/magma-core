@@ -171,23 +171,17 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     // NOTE: We always update `LastPriceAndTimestamp` even if theyre not used, for
     //       semantical simplicity of the variable.
     vault_state.last_price_and_timestamp = Some(StateSnapshot {
-        last_price: price,
-        last_timestamp: env.block.time
+        last_price: price, last_timestamp: env.block.time
     });
 
     let VaultParameters {
-        base_factor,
-        limit_factor,
-        full_range_weight,
+        base_factor, limit_factor, full_range_weight
     } = VAULT_PARAMETERS.load(deps.storage).unwrap();
 
     let VaultBalancesResponse { 
-        bal0,
-        bal1,
-        protocol_unclaimed_fees0,
-        protocol_unclaimed_fees1,
-        admin_unclaimed_fees0,
-        admin_unclaimed_fees1
+        bal0, bal1,
+        protocol_unclaimed_fees0, protocol_unclaimed_fees1,
+        admin_unclaimed_fees0, admin_unclaimed_fees1
     } = query::vault_balances(deps);
 
     if bal0.is_zero() && bal1.is_zero() {
@@ -230,6 +224,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     //            at least one of the inputed amounts was also zero, in
     //            which case the inputed amounts could only produce a limit
     //            position.
+    // Proof: Trivial from how balanced_balances are computed above.
     if balanced_balance0.is_zero() || balanced_balance1.is_zero() {
         assert!(balanced_balance0.is_zero() && balanced_balance1.is_zero());
         assert!(bal0.is_zero() || bal1.is_zero());
@@ -238,16 +233,17 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         assert!(!bal0.is_zero() && !bal1.is_zero());
 
         let balances_price = balanced_balance1.checked_div(balanced_balance0).unwrap();
-        // Invariant: The difference between prices should be atomic, as we already
-        //            ensure the balanced balances are in the right proportion during
-        //            their calculation.
+        // Invariant: The difference between prices should be atomic.
+        // Proof: Trivial from how balanced_balances are computed above.
         assert_approx_eq!(balances_price, price, Decimal::one());
     }
 
     let (full_range_balance0, full_range_balance1) = {
         let x0 = calc_x0(&base_factor, &full_range_weight, balanced_balance0);
         // Invariant: Wont overflow.
-        // Proof: Same reasoning as the proof for x0 computation.
+        // Proof: Same reasoning as the one used to prove that balanced_balances computation
+        //        wont panic, but by expanding the definition of $x_0$ and observing its
+        //        function of $x$.
         let y0 = x0.checked_mul(price).unwrap();
         (x0, y0)
     };
@@ -264,9 +260,10 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
 
         let balances_price = full_range_balance1.checked_div(full_range_balance0).unwrap();
-        // Invariant: The difference between prices should be atomic, as `utils::calc_x0`
+        // Invariant: The difference between prices will be atomic, as `utils::calc_x0`
         //            already ensures that the proportions hold. We still take one
         //            atom to compensate for roundings.
+        // Proof: Trivial from how $x_0$ is derived in the whitepaper.
         assert_approx_eq!(balances_price, price, Decimal::one());
     }
 
@@ -584,10 +581,7 @@ pub fn create_position_msg(
     let tokens_provided = vec![
         Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
         Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) },
-    ]
-    .into_iter()
-    .filter(|c| c.amount != "0")
-    .collect();
+    ].into_iter().filter(|c| c.amount != "0").collect();
 
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
     let upper_tick = vault_info.closest_valid_tick(upper_tick, &deps.querier).into();

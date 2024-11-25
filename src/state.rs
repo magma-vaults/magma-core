@@ -2,6 +2,7 @@ use crate::constants::{
     DEFAULT_PROTOCOL_FEE, DEFAULT_VAULT_CREATION_COST, MAX_PROTOCOL_FEE, MAX_TICK,
     MAX_VAULT_CREATION_COST, TWAP_SECONDS, VAULT_CREATION_COST_DENOM,
 };
+use crate::do_some;
 use crate::error::{InstantiationError, ProtocolOperationError};
 use crate::{
     constants::MIN_TICK,
@@ -100,16 +101,12 @@ impl PoolId {
     }
 
     pub fn to_pool(&self, querier: &QuerierWrapper) -> Pool {
-        let querier = PoolmanagerQuerier::new(querier);
         // Invariant: We already verified that the id refers to a valid pool the
         //            moment we constructed `self`.
-        querier
-            .pool(self.0)
-            .unwrap()
-            .pool
-            .unwrap()
-            .try_into()
-            .unwrap()
+        PoolmanagerQuerier::new(querier)
+            .pool(self.0).unwrap()
+            .pool.unwrap()
+            .try_into().unwrap()
     }
 
     pub fn price(&self, querier: &QuerierWrapper) -> Decimal {
@@ -215,18 +212,19 @@ pub struct VaultParameters {
     /// Price factor for the limit order. Thus, if the current price is `p`,
     /// then the limit position will have either range `[p/limit_factor, p]` or
     /// `[p, p*limit_factor]`. If `limit_factor == PriceFactor(Decimal::one())`,
-    /// then the vault wont have aa limit order, and will just hold remaining
+    /// then the vault wont have a limit order, and will just hold remaining
     /// tokens.
     pub limit_factor: PriceFactor,
-    /// Decimal weight, zero if we dont want a full range position.
+    /// Exact liquidity weight to put into the full range order. 
+    /// Zero if we dont want a full range position.
     pub full_range_weight: Weight
 }
 
 impl VaultParameters {
     pub fn new(params: VaultParametersInstantiateMsg) -> Result<Self, InstantiationError> {
         use InstantiationError::*;
-        let base_factor =
-            PriceFactor::new(&params.base_factor).ok_or(InvalidPriceFactor(params.base_factor))?;
+        let base_factor = PriceFactor::new(&params.base_factor)
+            .ok_or(InvalidPriceFactor(params.base_factor))?;
 
         let limit_factor = PriceFactor::new(&params.limit_factor)
             .ok_or(InvalidPriceFactor(params.limit_factor))?;
@@ -262,11 +260,7 @@ impl VaultParameters {
             })
         }?;
 
-        Ok(VaultParameters {
-            base_factor,
-            limit_factor,
-            full_range_weight
-        })
+        Ok(VaultParameters { base_factor, limit_factor, full_range_weight })
     }
 }
 
@@ -288,10 +282,9 @@ impl VaultInfo {
         let rebalancer = VaultRebalancer::new(info.rebalancer, deps)?;
 
         let admin = if let Some(admin) = info.admin {
-            Some(
-                deps.api
-                    .addr_validate(&admin)
-                    .map_err(|_| InvalidAdminAddress(admin))?,
+            Some(deps.api
+                .addr_validate(&admin)
+                .map_err(|_| InvalidAdminAddress(admin))?,
             )
         } else { None };
 
@@ -323,7 +316,11 @@ impl VaultInfo {
         Self { admin: None, ..self }
     }
 
-    pub fn change_rebalancer(self, new_rebalancer: VaultRebalancerInstantiateMsg, deps: Deps) -> Result<Self, InstantiationError> {
+    pub fn change_rebalancer(
+        self,
+        new_rebalancer: VaultRebalancerInstantiateMsg,
+        deps: Deps
+    ) -> Result<Self, InstantiationError> {
         let rebalancer = VaultRebalancer::new(new_rebalancer, deps)?;
         rebalancer.rebalancer_consistent_with_admin(&self.admin)?;
         Ok(Self { rebalancer, ..self })
@@ -358,25 +355,25 @@ impl VaultInfo {
     /// Min possible tick taking into account the pool tick spacing.
     pub fn min_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        // Invarint: Wont overflow because `i64::MIN <<< MIN_TICK`.
 
         // Invariant: Wont panic.
-        // Proof: Division wont fail, as `spacing` is always positive.
+        // Proof: Division wont fail, as `spacing` is always $\geq$ 1.
         //        Additions wont overflow, even for unreasonable tick
         //        spacings. Multiplication by spacing wont overflow,
         //        as we just divided by it.
-        MIN_TICK
-            .checked_add(spacing)
-            .and_then(|x| x.checked_add(1))
-            .and_then(|x| x.checked_div(spacing))
-            .and_then(|x| x.checked_mul(spacing))
-            .unwrap()
+        do_some!(MIN_TICK
+            .checked_add(spacing)?
+            .checked_add(1)?
+            .checked_div(spacing)?
+            .checked_mul(spacing)?
+        ).unwrap()
     }
 
     /// Max possible tick taking into account the pool tick spacing.
     pub fn max_valid_tick(&self, querier: &QuerierWrapper) -> i32 {
         let spacing = self.tick_spacing(querier);
-        // Invariant: Wont panic, as `spacing` is always positive.
+
+        // Invariant: Wont panic, as `spacing` is always $\geq$ 1.
         MAX_TICK
             .checked_div(spacing)
             .and_then(|x| x.checked_mul(spacing))
@@ -443,8 +440,7 @@ impl VaultRebalancer {
             }
             Admin {} => Ok(Self::Admin {}),
             Anyone {
-                seconds_before_rebalance,
-                price_factor_before_rebalance,
+                seconds_before_rebalance, price_factor_before_rebalance
             } => Ok(Self::Anyone {
                 price_factor_before_rebalance: PriceFactor::new(&price_factor_before_rebalance)
                     .ok_or(InvalidPriceFactor(price_factor_before_rebalance))?,
@@ -473,8 +469,6 @@ pub enum PositionType { FullRange, Base, Limit }
 
 type MaybePositionId = Option<u64>;
 
-// TODO: The bind can be stricter, as the second field can only change
-//       in one direction.
 #[cw_serde]
 pub struct StateSnapshot {
     pub last_price: Decimal,
@@ -604,8 +598,10 @@ pub const VAULT_PARAMETERS: Item<VaultParameters> = Item::new("vault_parameters"
 /// with contract business logic.
 pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
 
+/// FEES_INFO Holds any uncollected admin/protocol fees and fee parameters.
 pub const FEES_INFO: Item<FeesInfo> = Item::new("fees_info");
 
 /// FUNDS_INFO Refers to the known funds available to the contract,
 /// without counting protocol/admin fees.
 pub const FUNDS_INFO: Item<FundsInfo> = Item::new("funds_info");
+

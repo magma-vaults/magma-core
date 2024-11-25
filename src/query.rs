@@ -79,12 +79,9 @@ pub fn vault_balances(deps: Deps) -> VaultBalancesResponse {
             .checked_sub(admin_unclaimed_fees1)?;
         
         VaultBalancesResponse { 
-            bal0,
-            bal1,
-            protocol_unclaimed_fees0,
-            protocol_unclaimed_fees1,
-            admin_unclaimed_fees0,
-            admin_unclaimed_fees1
+            bal0, bal1,
+            protocol_unclaimed_fees0, protocol_unclaimed_fees1,
+            admin_unclaimed_fees0, admin_unclaimed_fees1
         }
     }.unwrap()
 }
