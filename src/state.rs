@@ -230,8 +230,18 @@ impl VaultParameters {
         let limit_factor = PriceFactor::new(&params.limit_factor)
             .ok_or(InvalidPriceFactor(params.limit_factor))?;
 
+
         let full_range_weight = Weight::new(&params.full_range_weight)
             .ok_or(InvalidWeight(params.full_range_weight))?;
+
+        /*
+        match base_factor.is_one() {
+            false if full_range_weight.is_max() => {
+                panic!("WORKING");
+            },
+            _ => unreachable!()
+        }
+        */
 
         // NOTE: We dont support vaults with idle capital nor less than 3 positions for now.
         //       Integrating both options is trivial, but we keep it simple for the v1.
@@ -240,7 +250,7 @@ impl VaultParameters {
             base_factor.is_one(),
             limit_factor.is_one(),
         ) {
-            (false, false, false) => Ok(()),
+            (false, false, false) if !full_range_weight.is_max() => Ok(()),
             (true, true, true) => Err(ContradictoryConfig {
                 reason: "All vault parameters will produce null positions, all capital would be idle".into()
             }),

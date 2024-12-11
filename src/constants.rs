@@ -6,7 +6,7 @@ pub const MIN_LIQUIDITY: Uint128 = Uint128::new(1000);
 pub const TWAP_SECONDS: u64 = 60;
 pub const POSITION_CREATION_SLIPPAGE: Decimal = Decimal::permille(999);
 
-pub static PROTOCOL_ADDR: &str = "osmo1a8gd76fw6umx652v7cs73vnge2zju8s8hcm86t";
+pub static PROTOCOL_ADDR: &str = "osmo1m3kd260ek7rl3a78mwgzlcpgjlfafzuqgpx5mj";
 pub const DEFAULT_PROTOCOL_FEE: Decimal = Decimal::permille(50);
 pub const MAX_PROTOCOL_FEE: Decimal = Decimal::permille(100);
 /// USDC denom for mainnet.

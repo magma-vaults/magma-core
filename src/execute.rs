@@ -1,3 +1,4 @@
+use core::panic;
 use std::str::FromStr;
 
 use cosmwasm_std::{

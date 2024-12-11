@@ -50,6 +50,7 @@ pub mod mock {
 
     impl PoolMockup {
         pub fn new_with_spread(usdc_in: u128, osmo_in: u128, spread_factor: &str) -> Self {
+            
             let app = OsmosisTestApp::new();
             
             let init_coins = &[
@@ -237,7 +238,7 @@ pub mod mock {
 
     impl VaultMockup<'_> {
         pub fn new(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> VaultMockup {
-            Self::new_with_rebalancer(pool_info, params, VaultRebalancerInstantiateMsg::Admin {})
+            Self::try_new_with_rebalancer(pool_info, params, VaultRebalancerInstantiateMsg::Admin {}).unwrap()
         }
 
         pub fn new_with_rebalancer(
@@ -245,6 +246,18 @@ pub mod mock {
             params: VaultParametersInstantiateMsg,
             rebalancer: VaultRebalancerInstantiateMsg
         ) -> VaultMockup {
+            Self::try_new_with_rebalancer(pool_info, params, rebalancer).unwrap()
+        }
+
+        pub fn try_new(pool_info: &PoolMockup, params: VaultParametersInstantiateMsg) -> Result<VaultMockup> {
+            Self::try_new_with_rebalancer(pool_info, params, VaultRebalancerInstantiateMsg::Admin {})
+        }
+
+        pub fn try_new_with_rebalancer(
+            pool_info: &PoolMockup,
+            params: VaultParametersInstantiateMsg,
+            rebalancer: VaultRebalancerInstantiateMsg
+        ) -> Result<VaultMockup> {
             let wasm = Wasm::new(&pool_info.app);
             let code_id = store_vaults_code(&wasm, &pool_info.deployer);
             let api = mock_dependencies().api;
@@ -268,15 +281,13 @@ pub mod mock {
                     Some("my vault"),
                     &[usdc_fee],
                     &pool_info.deployer,
-                )
-                .unwrap()
+                )?
                 .data
                 .address;
 
-            let vault_addr = api.addr_validate(&vault_addr).unwrap();
+            let vault_addr = api.addr_validate(&vault_addr)?;
 
-            VaultMockup { vault_addr, wasm }
-
+            Ok(VaultMockup { vault_addr, wasm })
         }
 
         pub fn deposit(
