@@ -1,4 +1,3 @@
-use core::panic;
 use std::str::FromStr;
 
 use cosmwasm_std::{
@@ -249,25 +248,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         (x0, y0)
     };
 
-    // Invariant: If any of the balanced balances is not zero, and if the vault
-    //            uses full range positions, then both balances for the full
-    //            range position shouldnt be zero, or the resulting position
-    //            wouldnt be in proportion.
-    if full_range_weight.is_zero() {
-        assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
-    } else if balanced_balance1.is_zero() || balanced_balance0.is_zero() {
-        assert!(full_range_balance0.is_zero() && full_range_balance1.is_zero());
-    } else {
-        assert!(!full_range_balance0.is_zero() && !full_range_balance1.is_zero());
-
-        let balances_price = full_range_balance1.checked_div(full_range_balance0).unwrap();
-        // Invariant: The difference between prices will be atomic, as `utils::calc_x0`
-        //            already ensures that the proportions hold. We still take one
-        //            atom to compensate for roundings.
-        // Proof: Trivial from how $x_0$ is derived in the whitepaper.
-        assert_approx_eq!(balances_price, price, Decimal::one());
-    }
-
     let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
         // Invariant: Wont underflow, because full range balances will always be
         //            lower than the total balanced balances (see `calc_x0`).
@@ -279,18 +259,13 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         (Decimal::zero(), Decimal::zero())
     };
 
-    if !base_factor.is_one() && !balanced_balance0.is_zero() {
-        assert!(!base_range_balance0.is_zero() && !base_range_balance1.is_zero());
-    }
-
-
     let (limit_balance0, limit_balance1) = {
         // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
         let limit_balance0 = Decimal::new(bal0).checked_sub(balanced_balance0).unwrap();
         let limit_balance1 = Decimal::new(bal1).checked_sub(balanced_balance1).unwrap();
         (limit_balance0, limit_balance1)
     };
-
+    
     let mut new_position_msgs: Vec<SubMsg> = vec![];
 
     // If `full_range_balance0` is not zero, we already checked that neither

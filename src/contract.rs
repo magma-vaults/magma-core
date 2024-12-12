@@ -842,7 +842,7 @@ pub mod test {
     }
 
     #[test]
-    fn edge_weights() {
+    fn illegal_weights() {
         let pool_mockup = PoolMockup::new(200_000, 100_000);
 
         let vault_mockup = VaultMockup::try_new(&pool_mockup, vault_params("2", "1.45", "0"));
@@ -853,15 +853,33 @@ pub mod test {
 
         let vault_mockup = VaultMockup::try_new(&pool_mockup, vault_params("1", "1.45", "1"));
         assert!(vault_mockup.is_err());
+    }
 
-        // Lower bound test.
+    #[test]
+    fn edge_weight_lower_bound() {
+        let pool_mockup = PoolMockup::new(200_000, 100_000);
         let min_weight = "0.000000000000000001";
         let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", min_weight));
 
-        vault_mockup.deposit(5_000_000_000, 5_000_000_000, &pool_mockup.user1).unwrap();
-        println!("{:?}", vault_mockup.vault_balances_query());
-
+        vault_mockup.deposit(1_001, 1_001, &pool_mockup.user1).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+    }
+
+    #[test]
+    fn edge_weight_upper_bound() {
+        let pool_mockup = PoolMockup::new(100_000, 33_000);
+        // Upper bound test.
+        let max_weight = "0.999999999999999999";
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("2", "1.45", max_weight));
+
+        vault_mockup.deposit(10000, 3300, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+    }
+
+    #[test]
+    fn brute_force_edge_weight_panics() {
+        assert!(false);
     }
 
 }
