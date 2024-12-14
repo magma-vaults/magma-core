@@ -163,19 +163,19 @@ pub mod mock {
             Ok(usdc_got?)
         }
 
-        pub fn osmo_balance_query(&self, address: &str) -> Uint128 {
+        pub fn osmo_balance_query<T: ToString>(&self, address: T) -> Uint128 {
             let bank = Bank::new(&self.app);
             let amount = bank.query_balance(&QueryBalanceRequest {
-                address: address.into(),
+                address: address.to_string(),
                 denom: OSMO_DENOM.into()
             }).unwrap().balance.unwrap().amount;
             Uint128::from_str(&amount).unwrap()
         }
 
-        pub fn usdc_balance_query(&self, address: &str) -> Uint128 {
+        pub fn usdc_balance_query<T: ToString>(&self, address: T) -> Uint128 {
             let bank = Bank::new(&self.app);
             let amount = bank.query_balance(&QueryBalanceRequest {
-                address: address.into(),
+                address: address.to_string(),
                 denom: USDC_DENOM.into()
             }).unwrap().balance.unwrap().amount;
             Uint128::from_str(&amount).unwrap()

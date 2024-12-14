@@ -49,8 +49,8 @@ pub enum InstantiationError {
     #[error("The vault admin cant have any fee if the vault doesnt have any admin")]
     AdminFeeWithoutAdmin { },
 
-    #[error("Contradiction: {reason}")]
-    ContradictoryConfig { reason: String },
+    #[error("Contradiction: {reason}; Hint: {hint}")]
+    ContradictoryConfig { reason: String, hint: String },
 
     #[error("Price factors are Uint128 Decimals greater than 1, got: {0}")]
     InvalidPriceFactor(Uint128),

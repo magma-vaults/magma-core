@@ -230,46 +230,32 @@ impl VaultParameters {
         let limit_factor = PriceFactor::new(&params.limit_factor)
             .ok_or(InvalidPriceFactor(params.limit_factor))?;
 
-
         let full_range_weight = Weight::new(&params.full_range_weight)
             .ok_or(InvalidWeight(params.full_range_weight))?;
 
-        /*
-        match base_factor.is_one() {
-            false if full_range_weight.is_max() => {
-                panic!("WORKING");
-            },
-            _ => unreachable!()
-        }
-        */
-
-        // NOTE: We dont support vaults with idle capital nor less than 3 positions for now.
-        //       Integrating both options is trivial, but we keep it simple for the v1.
-        match (
-            full_range_weight.is_zero(),
-            base_factor.is_one(),
-            limit_factor.is_one(),
-        ) {
-            (false, false, false) if !full_range_weight.is_max() => Ok(()),
-            (true, true, true) => Err(ContradictoryConfig {
-                reason: "All vault parameters will produce null positions, all capital would be idle".into()
-            }),
-            (true, true, _) => Err(ContradictoryConfig {
-                reason: "A vault without balanced orders will have idle capital".into()
-            }),
-            (_, _, true) => Err(ContradictoryConfig {
-                reason: "A vault without a limit order will have idle capital".into()
-            }),
-            (_, true, _) if !full_range_weight.is_max() => Err(ContradictoryConfig {
-                reason: "If the vault doenst have a base order, the full range weight should be 1".into()
-            }),
-            (_, false, _) if full_range_weight.is_max() => Err(ContradictoryConfig {
-                reason: "If the full range weight is 1, the base factor should also be".into()
-            }),
-            _ => Err(ContradictoryConfig {
-                reason: "We dont support vaults with less than 3 positions for now".into()
+        if full_range_weight.is_max() && !base_factor.is_one() {
+            return Err(ContradictoryConfig {
+                reason: "Allocating all liquidity into the full range implies the vault wont have any base one".into(),
+                hint: "Set base_factor to 1 to specify the vault will only manage a full range position".into()
             })
-        }?;
+        }
+
+        if !full_range_weight.is_max() && base_factor.is_one() {
+            return Err(ContradictoryConfig { 
+                reason: "A vault without a base order should allocate all liquidity into the full range".into(),
+                hint: "If base_factor is 1, the full_range_weight should also be".into()
+            })
+        }
+
+        if limit_factor.is_one() {
+            return Err(ContradictoryConfig { 
+                reason: "A vault without limit positions will generally have idle capital".into(),
+                hint: "Set a limit_factor different from 1".into()
+            })
+        }
+
+        // Invariant: Those 3 conditions above are enough to ensure the vault doesnt have idle capital.
+        // Proof outline: Specify all conditions that produce idle capital and simplify.
 
         Ok(VaultParameters { base_factor, limit_factor, full_range_weight })
     }
@@ -470,6 +456,7 @@ impl VaultRebalancer {
                 VaultRebalancer::Anyone { .. } => Ok(()),
                 _ => Err(InstantiationError::ContradictoryConfig {
                     reason: "If admin is none, the rebalancer can only be anyone".into(),
+                    hint: "Set an admin or set the rebalancer to anyone".into()
                 })
             }
         } else { Ok(()) }
