@@ -17,7 +17,7 @@ thiserror = "1"
 osmosis-test-tube = { version = "25.0.0", optional = true }
 
 # schemars = "0.8.20"
-cosmwasm-schema = "1.5.7"
+cosmwasm-schema = "2.2.0"
 osmosis-std = "0.25.0"
 cw-utils = "1.0.3"
 
