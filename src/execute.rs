@@ -1,3 +1,4 @@
+use core::panic;
 use std::str::FromStr;
 
 use cosmwasm_std::{
@@ -14,7 +15,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::{
 
 use crate::{
     assert_approx_eq,
-    constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL_ADDR, VAULT_CREATION_COST_DENOM},
+    constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL_ADDR},
     do_some,
     error::{
         AdminOperationError, DepositError, ProtocolOperationError, RebalanceError, WithdrawalError,
@@ -554,11 +555,12 @@ pub fn create_position_msg(
     let vault_info = VAULT_INFO.load(deps.storage).unwrap();
     let pool = vault_info.pool(&deps.querier);
 
-    let tokens_provided = vec![
+    let mut tokens_provided: Vec<_> = vec![
         Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
         Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) },
     ].into_iter().filter(|c| c.amount != "0").collect();
-
+    tokens_provided.sort_by(|x, y| x.denom.cmp(&y.denom));
+    
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
     let upper_tick = vault_info.closest_valid_tick(upper_tick, &deps.querier).into();
 
@@ -649,8 +651,15 @@ pub fn withdraw(
         Decimal::raw(shares.into()).checked_div(total_shares_supply).unwrap()
     ).unwrap();
 
-    let expected_withdrawn_amount0 = shares_proportion.mul_raw(bal0).atomics();
-    let expected_withdrawn_amount1 = shares_proportion.mul_raw(bal1).atomics();
+    // NOTE: We subtract 3 atoms (1 for each possible position) to account
+    //       for dust errors during liquidity proportion calculation.
+    let expected_withdrawn_amount0 = shares_proportion
+        .mul_raw(bal0).atomics()
+        .checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
+
+    let expected_withdrawn_amount1 = shares_proportion
+        .mul_raw(bal1).atomics()
+        .checked_sub(Uint128::new(3)).unwrap_or(Uint128::zero());
 
     // Invariant: Wont underflow as `shares_proportion` is a valid weight.
     FUNDS_INFO.update(deps.storage, |mut funds| -> StdResult<_> {
@@ -675,18 +684,10 @@ pub fn withdraw(
     }
 
     let liquidity_removal_msgs: Vec<_> = vec![
-        remove_liquidity_msg(
-            PositionType::FullRange,
-            deps.as_ref(),
-            &env,
-            &shares_proportion,
-        ),
+        remove_liquidity_msg(PositionType::FullRange, deps.as_ref(), &env, &shares_proportion),
         remove_liquidity_msg(PositionType::Base, deps.as_ref(), &env, &shares_proportion),
         remove_liquidity_msg(PositionType::Limit, deps.as_ref(), &env, &shares_proportion),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    ].into_iter().flatten().collect();
 
     if shares_proportion.is_max() {
         VAULT_STATE.update(deps.storage, |x| -> StdResult<_> { Ok(VaultState {
@@ -736,14 +737,12 @@ pub fn withdraw_protocol_fees(deps: DepsMut, info: MessageInfo) -> Result<Respon
         to_address: PROTOCOL_ADDR.into(),
         amount: vec![
             coin(fees.protocol_tokens0_owned.into(), denom0),
-            coin(fees.protocol_tokens1_owned.into(), denom1),
-            coin(fees.protocol_vault_creation_tokens_owned.into(), VAULT_CREATION_COST_DENOM)
+            coin(fees.protocol_tokens1_owned.into(), denom1)
         ].into_iter().filter(|c| !c.amount.is_zero()).collect() 
     };
 
     fees.protocol_tokens0_owned = Uint128::zero();
     fees.protocol_tokens1_owned = Uint128::zero();
-    fees.protocol_vault_creation_tokens_owned = Uint128::zero();
 
     // Invariant: Will serialize as all types are proper.
     FEES_INFO.save(deps.storage, &fees).unwrap();

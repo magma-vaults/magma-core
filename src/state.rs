@@ -1,6 +1,5 @@
 use crate::constants::{
-    DEFAULT_PROTOCOL_FEE, DEFAULT_VAULT_CREATION_COST, MAX_PROTOCOL_FEE, MAX_TICK,
-    MAX_VAULT_CREATION_COST, TWAP_SECONDS, VAULT_CREATION_COST_DENOM,
+    DEFAULT_PROTOCOL_FEE, MAX_PROTOCOL_FEE, MAX_TICK, TWAP_SECONDS
 };
 use crate::do_some;
 use crate::error::{InstantiationError, ProtocolOperationError};
@@ -9,7 +8,7 @@ use crate::{
     msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, Env, MessageInfo, QuerierWrapper, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Decimal, Deps, Env, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::twap::v1beta1::TwapQuerier;
 use osmosis_std::types::osmosis::{
@@ -180,26 +179,6 @@ impl Default for ProtocolFee {
     fn default() -> Self {
         // Invariant: Wont panic as the const is in [0, 1].
         Self(Weight::try_from(DEFAULT_PROTOCOL_FEE).unwrap())
-    }
-}
-
-#[cw_serde]
-#[readonly::make]
-pub struct VaultCreationCost(pub Uint128);
-impl VaultCreationCost {
-    pub fn max() -> Uint128 {
-        MAX_VAULT_CREATION_COST
-    }
-
-    pub fn new(value: Uint128) -> Option<Self> {
-        (value <= Self::max()).then_some(Self(value))
-    }
-}
-
-impl Default for VaultCreationCost {
-    fn default() -> Self {
-        // Invariant: Wont panic, as the const is clearly below `Self::max()`.
-        Self::new(DEFAULT_VAULT_CREATION_COST).unwrap()
     }
 }
 
@@ -507,8 +486,6 @@ pub struct FeesInfo {
     pub protocol_fee: ProtocolFee,
     pub protocol_tokens0_owned: Uint128,
     pub protocol_tokens1_owned: Uint128,
-    pub protocol_vault_creation_cost: VaultCreationCost,
-    pub protocol_vault_creation_tokens_owned: Uint128,
     pub admin_fee: ProtocolFee,
     pub admin_tokens0_owned: Uint128,
     pub admin_tokens1_owned: Uint128
@@ -516,44 +493,21 @@ pub struct FeesInfo {
 
 impl FeesInfo {
     
-    fn validate_vault_creation_cost(info: &MessageInfo) -> Result<Uint128, InstantiationError> {
-        let vault_creation_cost = VaultCreationCost::default();
-
-        let paid_amount = cw_utils::must_pay(info, VAULT_CREATION_COST_DENOM).unwrap_or_default();
-
-        if paid_amount != vault_creation_cost.0 {
-            Err(InstantiationError::VaultCreationCostNotPaid {
-                cost: vault_creation_cost.0.into(),
-                denom: VAULT_CREATION_COST_DENOM.into(),
-                got: paid_amount.into()
-            })
-        } else { Ok(paid_amount) }
-    }
-
     fn validate_admin_fee(admin_fee: Uint128, vault_info: &VaultInfo) -> Result<ProtocolFee, InstantiationError> {
-        let admin_fee = ProtocolFee::new(&admin_fee).ok_or(InstantiationError::InvalidAdminFee {
-            max: ProtocolFee::max().atomics(),
-            got: admin_fee,
-        })?;
+        let admin_fee = ProtocolFee::new(&admin_fee)
+            .ok_or(InstantiationError::InvalidAdminFee {
+                max: ProtocolFee::max().atomics(),
+                got: admin_fee,
+            })?;
 
         if !admin_fee.0.is_zero() && vault_info.admin.is_none() {
             Err(InstantiationError::AdminFeeWithoutAdmin {})
         } else { Ok(admin_fee) }
     }
 
-    pub fn new(
-        admin_fee: Uint128,
-        vault_info: &VaultInfo,
-        info: &MessageInfo
-    ) -> Result<FeesInfo, InstantiationError> {
-        let paid_amount = Self::validate_vault_creation_cost(info)?;
+    pub fn new(admin_fee: Uint128, vault_info: &VaultInfo) -> Result<FeesInfo, InstantiationError> {
         let admin_fee = Self::validate_admin_fee(admin_fee, vault_info)?;
-
-        Ok(FeesInfo {
-            admin_fee,
-            protocol_vault_creation_tokens_owned: paid_amount,
-            ..FeesInfo::default()
-        })
+        Ok(FeesInfo { admin_fee, ..FeesInfo::default() })
     }
 
     pub fn update_admin_fee(&self, admin_fee: Uint128, deps: Deps) -> Result<FeesInfo, InstantiationError> {
@@ -564,8 +518,8 @@ impl FeesInfo {
     }
 
     pub fn update_protocol_fee(&self, protocol_fee: Uint128) -> Result<FeesInfo, ProtocolOperationError> {
-        let protocol_fee = 
-            ProtocolFee::new(&protocol_fee).ok_or(ProtocolOperationError::InvalidProtocolFee { 
+        let protocol_fee = ProtocolFee::new(&protocol_fee)
+            .ok_or(ProtocolOperationError::InvalidProtocolFee { 
                 max: MAX_PROTOCOL_FEE.atomics(),
                 got: protocol_fee
             })?;

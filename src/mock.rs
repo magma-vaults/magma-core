@@ -22,14 +22,14 @@ pub mod mock {
     };
 
     use crate::{
-        constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST_DENOM},
+        constants::{MAX_TICK, MIN_TICK, TWAP_SECONDS, VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM},
         msg::{
             DepositMsg, ExecuteMsg, InstantiateMsg, PositionBalancesWithFeesResponse, QueryMsg,
             VaultBalancesResponse, VaultInfoInstantiateMsg, VaultParametersInstantiateMsg,
             VaultRebalancerInstantiateMsg, WithdrawMsg,
         },
         state::{
-            FeesInfo, PositionType, ProtocolFee, VaultCreationCost, VaultParameters, VaultState,
+            FeesInfo, PositionType, ProtocolFee, VaultParameters, VaultState,
         },
     };
 
@@ -54,8 +54,8 @@ pub mod mock {
             let app = OsmosisTestApp::new();
             
             let init_coins = &[
-                Coin::new(1_000_000_000_000u128, USDC_DENOM),
-                Coin::new(1_000_000_000_000u128, OSMO_DENOM),
+                Coin::new(1_000_000_000_000_000u128, USDC_DENOM),
+                Coin::new(1_000_000_000_000_000u128, OSMO_DENOM),
             ];
 
             let mut accounts = app.init_accounts(init_coins, 3).unwrap().into_iter();
@@ -99,8 +99,8 @@ pub mod mock {
                             Coin::new(usdc_in, USDC_DENOM).into(),
                             Coin::new(osmo_in, OSMO_DENOM).into(),
                         ],
-                        token_min_amount0: usdc_in.to_string(),
-                        token_min_amount1: osmo_in.to_string(),
+                        token_min_amount0: ((usdc_in*99999)/100000).to_string(),
+                        token_min_amount1: ((osmo_in*99999)/100000).to_string(),
                     },
                     &deployer,
                 )
@@ -262,7 +262,7 @@ pub mod mock {
             let code_id = store_vaults_code(&wasm, &pool_info.deployer);
             let api = mock_dependencies().api;
 
-            let usdc_fee = Coin::new(VaultCreationCost::default().0.into(), USDC_DENOM);
+            let usdc_fee = Coin::new(VAULT_CREATION_COST.into(), USDC_DENOM);
             let vault_addr = wasm
                 .instantiate(
                     code_id,
