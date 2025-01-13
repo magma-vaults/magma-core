@@ -553,8 +553,3 @@ pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
 
 /// FEES_INFO Holds any uncollected admin/protocol fees and fee parameters.
 pub const FEES_INFO: Item<FeesInfo> = Item::new("fees_info");
-
-/// FUNDS_INFO Refers to the known funds available to the contract,
-/// without counting protocol/admin fees.
-pub const FUNDS_INFO: Item<FundsInfo> = Item::new("funds_info");
-

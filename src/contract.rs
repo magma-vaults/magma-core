@@ -14,7 +14,7 @@ use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::MsgCreatePositi
 use crate::constants::{PROTOCOL_ADDR, VAULT_CREATION_COST, VAULT_CREATION_COST_DENOM};
 use crate::error::InstantiationError;
 use crate::msg::QueryMsg;
-use crate::state::{FeesInfo, FundsInfo, FEES_INFO, FUNDS_INFO};
+use crate::state::{FeesInfo, FEES_INFO};
 use crate::{do_me, execute, query};
 use crate::{
     error::ContractError,
@@ -34,7 +34,6 @@ pub fn instantiate(
     let vault_parameters = VaultParameters::new(msg.vault_parameters.clone())?;
     let vault_state = VaultState::default();
     let fees_info = FeesInfo::new(msg.vault_info.admin_fee, &vault_info)?;
-    let funds_info = FundsInfo::default();
     let token_info = TokenInfo {
         name: msg.vault_info.vault_name,
         symbol: msg.vault_info.vault_symbol,
@@ -53,7 +52,6 @@ pub fn instantiate(
         VAULT_PARAMETERS.save(deps.storage, &vault_parameters)?;
         VAULT_STATE.save(deps.storage, &vault_state)?;
         FEES_INFO.save(deps.storage, &fees_info)?;
-        FUNDS_INFO.save(deps.storage, &funds_info)?;
         TOKEN_INFO.save(deps.storage, &token_info)?;
     }.unwrap();
 
@@ -74,14 +72,14 @@ pub fn instantiate(
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     use QueryMsg::*;
     match msg {
         PositionBalancesWithFees { position_type } => 
             to_json_binary( &query::position_balances_with_fees(position_type, deps),),
         CalcSharesAndUsableAmounts { for_amount0, for_amount1 } => 
-            to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, deps)),
-        VaultBalances {} => to_json_binary(&query::vault_balances(deps)),
+            to_json_binary(&query::calc_shares_and_usable_amounts(for_amount0, for_amount1, deps, env)),
+        VaultBalances {} => to_json_binary(&query::vault_balances(deps, env)),
         Balance { address } => to_json_binary(&query_balance(deps, address)?),
         Allowance { owner, spender } => to_json_binary(&query_allowance(deps, owner, spender)?),
         // Invariant: Any state is present after instantiation.
@@ -379,10 +377,11 @@ pub mod test {
         vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
         let vault_bals_after_withdrawal = vault_mockup.vault_balances_query();
 
+        // 1 atom due to roundings, 3 atoms due to withdrawals for each position.
         assert_eq!(vault_bals_before_withdrawal.bal0, Uint128::new(vault_x));
         assert_eq!(vault_bals_before_withdrawal.bal1, Uint128::new(vault_y));
-        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
-        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        assert_approx_eq!(vault_bals_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::new(4));
+        assert_approx_eq!(vault_bals_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::new(4));
     }
 
 
@@ -402,7 +401,8 @@ pub mod test {
         vault_mockup.withdraw(shares_got, &pool_mockup.user1).unwrap();
 
         assert!(vault_mockup.vault_balances_query().bal0.is_zero());
-        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        // 1 atom due to roundings, 3 atoms due to withdrawals for each position.
+        assert_approx_eq!(vault_mockup.vault_balances_query().bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::new(4));
     }
 
     #[test]
@@ -479,8 +479,9 @@ pub mod test {
 
         let vault_balances_after_withdrawal = vault_mockup.vault_balances_query();
 
-        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
-        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::one());
+        // 1 Atom for shares rounding, 3 atoms for each position.
+        assert_approx_eq!(vault_balances_after_withdrawal.bal0, Uint128::zero(), MIN_LIQUIDITY + Uint128::new(4));
+        assert_approx_eq!(vault_balances_after_withdrawal.bal1, Uint128::zero(), MIN_LIQUIDITY + Uint128::new(4));
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees0.is_zero());
         assert!(vault_balances_after_withdrawal.protocol_unclaimed_fees1.is_zero());
     }
@@ -588,6 +589,41 @@ pub mod test {
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
         let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares - Uint128::one(), &pool_mockup.user2).unwrap();
+    }
+
+    #[test]
+    fn min_liquidity_attack_for_large_sums() {
+        let pool_mockup = PoolMockup::new(1_000_000_000, 90_123_456_789_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.12", "1.08", "0"));
+
+        let (osmo_in, usdc_in) = (9_818_388, 20_000_000_000);
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
+
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
+
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
+        println!("{:?}", vault_mockup.vault_balances_query());
+
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        println!("--------------------");
+        println!("{:?}", vault_mockup.vault_balances_query());
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 120_000_00).unwrap();
+        println!("{:?}", vault_mockup.vault_balances_query());
+        println!("--------------------");
+
+        println!("{:?}", pool_mockup.pool().current_sqrt_price);
+        let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
+        println!("{:?}", vault_mockup.vault_balances_query());
     }
 
     #[test]
@@ -1021,11 +1057,11 @@ pub mod test {
         assert!(out_of_proportion_deposit0.is_err());
         assert!(out_of_proportion_deposit1.is_err());
 
-        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 100_000_000).unwrap();
-        vault_mockup.deposit(100_000, 0, &pool_mockup.user2).unwrap();
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 120_000_000).unwrap();
+        let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
         assert!(vault_mockup.deposit(0, 100_000, &pool_mockup.user2).is_err());
     }
-
 
     #[test]
     fn limit_vault_with_non_limit_deposit() {
@@ -1043,5 +1079,21 @@ pub mod test {
         assert!(bals.bal1.is_zero() && !bals.bal0.is_zero());
     }
 
+    /*
+    #[test]
+    fn narrow_base_position() {
+        let pool_mockup = PoolMockup::new(100_000_000, 100_000_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.001", "2", "0"));
+        vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+    }
 
+    #[test]
+    fn narrow_base_position_with_large_reserves() {
+        let pool_mockup = PoolMockup::new(1_000_000_000, 1_000_000_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.001", "2", "0"));
+        vault_mockup.deposit(10_000_000, 10_000_000, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+    }
+    */
 }

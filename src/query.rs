@@ -1,8 +1,8 @@
 use std::{cmp, str::FromStr};
 
-use cosmwasm_std::{Deps, Uint128, Uint256};
+use cosmwasm_std::{Deps, Env, Uint128, Uint256};
 use cw20_base::state::TOKEN_INFO;
-use osmosis_std::types::{cosmos::base::v1beta1::Coin, osmosis::concentratedliquidity::v1beta1::PositionByIdRequest};
+use osmosis_std::types::{cosmos::{bank::v1beta1::BankQuerier, base::v1beta1::Coin}, osmosis::concentratedliquidity::v1beta1::PositionByIdRequest};
 
 use crate::{
     constants::MIN_LIQUIDITY,
@@ -10,7 +10,7 @@ use crate::{
     msg::{
         CalcSharesAndUsableAmountsResponse, PositionBalancesWithFeesResponse, VaultBalancesResponse,
     },
-    state::{FundsInfo, PositionType, FEES_INFO, FUNDS_INFO, VAULT_INFO, VAULT_STATE},
+    state::{PositionType, FEES_INFO, VAULT_INFO, VAULT_STATE},
 };
 
 /// Partition available balances to the vault in 3 sets:
@@ -19,17 +19,39 @@ use crate::{
 /// - Idle vault admin fees, not yet claimed nor commited to the state.
 ///
 /// For this, query the fees and balances in all current vault positions and 
-/// funds tracked by [`FUNDS_INFO`] and [`FEES_INFO`].
-pub fn vault_balances(deps: Deps) -> VaultBalancesResponse {
+/// the funds in the contract (except for funds tracked by [`FEES_INFO`]).
+pub fn vault_balances(deps: Deps, env: Env) -> VaultBalancesResponse {
     let full_range_balances = position_balances_with_fees(PositionType::FullRange, deps);
     let base_balances = position_balances_with_fees(PositionType::Base, deps);
     let limit_balances = position_balances_with_fees(PositionType::Limit, deps);
 
+    let bank = BankQuerier::new(&deps.querier);
+    let contract_addr = env.contract.address.as_str();
     // Invariant: Any state will always be present after instantiation.
-    let FundsInfo { available_balance0, available_balance1 } = FUNDS_INFO
-        .load(deps.storage).unwrap();
+    let (denom0, denom1) = VAULT_INFO.load(deps.storage).unwrap().denoms(&deps.querier);
 
     let fees = FEES_INFO.load(deps.storage).unwrap();
+    
+    // Invariant: Wont Panic.
+    // Proof: We know `contract_addr` and `denom(0|1)` are proper. We also know
+    //        commited protocol/admin fees partition the vault available balances.
+    let (available_balance0, available_balance1) = do_me! {
+        let available_balance0 = Uint128::from_str(
+            &bank.balance(contract_addr.into(), denom0)?.balance.unwrap().amount
+        )?;
+        let available_balance1 = Uint128::from_str(
+            &bank.balance(contract_addr.into(), denom1)?.balance.unwrap().amount
+        )?;
+
+        (
+            available_balance0
+                .checked_sub(fees.admin_tokens0_owned)?
+                .checked_sub(fees.protocol_tokens0_owned)?,
+            available_balance1
+                .checked_sub(fees.admin_tokens1_owned)?
+                .checked_sub(fees.protocol_tokens1_owned)?
+        )
+    }.unwrap();
 
     // Invariant: Wont panic.
     // Proof: If the contract has unclaimed fees, we know its balance will at
@@ -165,9 +187,14 @@ pub fn position_balances_with_fees(
 pub fn calc_shares_and_usable_amounts(
     input_amount0: Uint128,
     input_amount1: Uint128,
-    deps: Deps
+    deps: Deps,
+    env: Env
 ) -> CalcSharesAndUsableAmountsResponse {
-    let VaultBalancesResponse { bal0: total0, bal1: total1, .. } = vault_balances(deps);
+    let VaultBalancesResponse { bal0: total0, bal1: total1, .. } = vault_balances(deps, env);
+    // Invariant: Wont underflow, as `input_amount(0|1)` always included in the current balances
+    //            available to the contract.
+    let total0 = total0.checked_sub(input_amount0).unwrap();
+    let total1 = total1.checked_sub(input_amount1).unwrap();
 
     // Invariant: `TOKEN_INFO` always present after instantiation.
     let total_supply = TOKEN_INFO.load(deps.storage).unwrap().total_supply;

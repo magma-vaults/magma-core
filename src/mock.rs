@@ -13,7 +13,7 @@ pub mod mock {
                 CreateConcentratedLiquidityPoolsProposal, FullPositionBreakdown, MsgCreatePosition,
                 PoolRecord, PositionByIdRequest,
             },
-            poolmanager::v1beta1::{MsgSwapExactAmountIn, SwapAmountInRoute},
+            poolmanager::v1beta1::{MsgSwapExactAmountIn, PoolRequest, SwapAmountInRoute},
         },
     };
     use osmosis_test_tube::{
@@ -30,6 +30,7 @@ pub mod mock {
             FeesInfo, PositionType, ProtocolFee, VaultParameters, VaultState,
         },
     };
+    use osmosis_std::types::osmosis::concentratedliquidity::v1beta1::Pool;
 
     // TODO: Ideally abstract those 2, so the tests dev doesnt has to keep
     // track of whats in the pool.
@@ -192,6 +193,12 @@ pub mod mock {
                 .expect("oops")
                 .map(|x| Decimal::raw(x.u128()))?;
             Ok(liq)
+        }
+
+        pub fn pool(&self) -> Pool {
+            let p = PoolManager::new(&self.app);
+            let res = p.query_pool(&PoolRequest { pool_id: self.pool_id }).unwrap();
+            res.pool.unwrap().try_into().unwrap()
         }
     }
 
