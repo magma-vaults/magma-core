@@ -1,8 +1,7 @@
-use core::panic;
 use std::str::FromStr;
 
 use cosmwasm_std::{
-    coin, coins, Addr, BankMsg, Decimal, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128
+    coin, coins, Addr, BankMsg, Decimal, Decimal256, Deps, DepsMut, Env, MessageInfo, Response, StdResult, SubMsg, Uint128
 };
 use cw20_base::{
     contract::{execute_burn, execute_mint, query_balance, query_token_info},
@@ -19,7 +18,6 @@ use osmosis_std::types::{
 };
 
 use crate::{
-    assert_approx_eq,
     constants::{MIN_LIQUIDITY, POSITION_CREATION_SLIPPAGE, PROTOCOL_ADDR},
     do_some,
     error::{
@@ -232,27 +230,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     assert!(bal0 == balanced_balance0.atomics() || bal1 == balanced_balance1.atomics());
     assert!(bal0 >= raw(&balanced_balance0) && bal1 >= raw(&balanced_balance1));
 
-    // Invariant: Balanced positions have both amounts different from zero.
-    //            So, if at least one of the in balance amounts are zero,
-    //            then both have to be. And that can only be the case if
-    //            at least one of the inputed amounts was also zero, in
-    //            which case the inputed amounts could only produce a limit
-    //            position.
-    // Proof: Trivial from how balanced_balances are computed above.
-    if balanced_balance0.is_zero() || balanced_balance1.is_zero() {
-        assert!(balanced_balance0.is_zero() && balanced_balance1.is_zero());
-        assert!(bal0.is_zero() || bal1.is_zero());
-    } else {
-        assert!(!balanced_balance0.is_zero() && !balanced_balance1.is_zero());
-        assert!(!bal0.is_zero() && !bal1.is_zero());
-
-        let balances_price = balanced_balance1.checked_div(balanced_balance0).unwrap();
-        // Invariant: The difference between prices should be atomic.
-        // Proof: Trivial from how balanced_balances are computed above.
-        // FIXME???
-        // assert_approx_eq!(balances_price, price, Decimal::one());
-    }
-
     let (full_range_balance0, full_range_balance1) = {
         let x0 = calc_x0(&base_factor, &full_range_weight, balanced_balance0);
         // Invariant: Wont overflow.
@@ -260,7 +237,11 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         //        wont panic, but by expanding the definition of $x_0$ and observing its
         //        function of $x$.
         let y0 = x0.checked_mul(price).unwrap();
-        (x0, y0)
+        // NOTE: We subtract 1 to deal with osmosis math retardation.
+        (
+            x0.checked_sub(Decimal::raw(1)).unwrap_or(Decimal::zero()),
+            y0.checked_sub(Decimal::raw(1)).unwrap_or(Decimal::zero())
+        )
     };
 
     let (base_range_balance0, base_range_balance1) = if !base_factor.is_one() {
@@ -268,8 +249,11 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         //            lower than the total balanced balances (see `calc_x0`).
         let base_range_balance0 = balanced_balance0.checked_sub(full_range_balance0).unwrap();
         let base_range_balance1 = balanced_balance1.checked_sub(full_range_balance1).unwrap();
-
-        (base_range_balance0, base_range_balance1)
+        // NOTE: We subtract 2 to deal with osmosis math retardation.
+        (
+            base_range_balance0.checked_sub(Decimal::raw(2)).unwrap_or(Decimal::zero()),
+            base_range_balance1.checked_sub(Decimal::raw(2)).unwrap_or(Decimal::zero())
+        )
     } else {
         (Decimal::zero(), Decimal::zero())
     };
@@ -278,16 +262,16 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         // Invariant: Wont overflow because `bal >= balanced_balance`, as we earlier checked.
         let limit_balance0 = Decimal::new(bal0).checked_sub(balanced_balance0).unwrap();
         let limit_balance1 = Decimal::new(bal1).checked_sub(balanced_balance1).unwrap();
-        (limit_balance0, limit_balance1)
+        // NOTE: We subtract 1 to deal with osmosis math retardation.
+        (
+            limit_balance0.checked_sub(Decimal::raw(1)).unwrap_or(Decimal::zero()),
+            limit_balance1.checked_sub(Decimal::raw(1)).unwrap_or(Decimal::zero())
+        )
     };
     
     let mut new_position_msgs: Vec<SubMsg> = vec![];
 
-    // If `full_range_balance0` is not zero, we already checked that neither
-    // `full_range_balance1` will be. If they happened to be zero, it means that
-    // the vault only holds tokens for limit orders for now, or that
-    // the vault simply has zero `full_range_weight`.
-    if !full_range_weight.is_zero() && !full_range_balance0.is_zero() {
+    if !full_range_weight.is_zero() && !full_range_balance0.is_zero() && !full_range_balance1.is_zero() {
         let lower_tick = vault_info.min_valid_tick(&deps.querier);
         let upper_tick = vault_info.max_valid_tick(&deps.querier);
 
@@ -304,9 +288,7 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
         ))
     }
 
-    // We just checked that if `base_range_balance0` is not zero, neither
-    // `base_range_balance1` will be.
-    if !base_factor.is_one() && !base_range_balance0.is_zero() {
+    if !base_factor.is_one() && !base_range_balance0.is_zero() && !base_range_balance1.is_zero() {
         // Invariant: `base_factor > 1`, thus wont panic.
         let lower_price = price.checked_div(base_factor.0).unwrap();
         let upper_price = price.checked_mul(base_factor.0).unwrap_or(Decimal::MAX);
@@ -374,12 +356,6 @@ pub fn rebalance(deps_mut: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
                 2,
             ))
         } else {
-            // Invariant: Both limit balances cant be non zero, or the resutling position
-            //            wouldnt be a limit position. 
-            // Proof: Assume that wasnt the case due to, for example, roundings during 
-            //        divisions. That would immediately break the invariants stated directly
-            //        after `balanced_balance0` and `balanced_balance1` computation, whose
-            //        proofs are trivial.
             unreachable!()
         }
     }
@@ -544,9 +520,9 @@ pub fn remove_liquidity_msg(
         .liquidity
     ).unwrap();
 
-    // Invariant: We know any position liquidity is a valid Decimal.
+    // Invariant: We know any position liquidity is a valid Decimal256.
     let position_liquidity = liquidity_proportion
-        .mul_dec(&Decimal::from_str(&position_liquidity).unwrap())
+        .mul_dec256(&Decimal256::from_str(&position_liquidity).unwrap())
         .atomics()
         .to_string();
 
@@ -575,6 +551,7 @@ pub fn create_position_msg(
         Coin { denom: pool.token0.clone(), amount: raw(&tokens_provided0) },
         Coin { denom: pool.token1.clone(), amount: raw(&tokens_provided1) },
     ].into_iter().filter(|c| c.amount != "0").collect();
+    
     tokens_provided.sort_by(|x, y| x.denom.cmp(&y.denom));
     
     let lower_tick = vault_info.closest_valid_tick(lower_tick, &deps.querier).into();
@@ -590,7 +567,7 @@ pub fn create_position_msg(
         upper_tick,
         tokens_provided,
         token_min_amount0: raw(&slippage.mul_dec(&tokens_provided0)),
-        token_min_amount1: raw(&slippage.mul_dec(&tokens_provided1)),
+        token_min_amount1: raw(&slippage.mul_dec(&tokens_provided1))
     }
 }
 

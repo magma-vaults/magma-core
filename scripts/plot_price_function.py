@@ -22,15 +22,9 @@ def osmo_p(t: int):
     f = floor(t/d)
     return 10**f + (t - d*f)*10**(f-6)
 
-p0 = 1
-pa = osmo_p(-9990)
-pb = osmo_p(990)
-k0 = p0/pa
-k1 = pb/p0
-
-print(f'Real price range: [{pa}, {pb}]')
-print(f'Range taking l = -9990: [{p0/k0}, {p0*k0}]')
-print(f'Range taking u = 990: [{p0/k1}, {p0*k1}]')
+print(osmo_p(-2867600))
+print(osmo_p(-2846300))
+print(f'next: {osmo_p(-2846400)}')
 
 def osmo_p_inv(p: float) -> int | None:
     if p < 0: return None

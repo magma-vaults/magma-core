@@ -4,7 +4,7 @@ pub const MIN_TICK: i32 = -108_000_000;
 pub const MAX_TICK: i32 = 342_000_000;
 pub const MIN_LIQUIDITY: Uint128 = Uint128::new(1000);
 pub const TWAP_SECONDS: u64 = 60;
-pub const POSITION_CREATION_SLIPPAGE: Decimal = Decimal::permille(999);
+pub const POSITION_CREATION_SLIPPAGE: Decimal = Decimal::permille(900);
 
 pub static PROTOCOL_ADDR: &str = "osmo1m3kd260ek7rl3a78mwgzlcpgjlfafzuqgpx5mj";
 pub const DEFAULT_PROTOCOL_FEE: Decimal = Decimal::permille(50);

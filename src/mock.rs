@@ -52,10 +52,8 @@ pub mod mock {
             
             let app = OsmosisTestApp::new();
             
-            let init_coins = &[
-                Coin::new(1_000_000_000_000_000u128, USDC_DENOM),
-                Coin::new(1_000_000_000_000_000u128, OSMO_DENOM),
-            ];
+            let init_bal = std::cmp::max(1_000_000_000_000_000u128, std::cmp::max(usdc_in * 10, osmo_in * 10));
+            let init_coins = &[ Coin::new(init_bal, USDC_DENOM), Coin::new(init_bal, OSMO_DENOM) ];
 
             let mut accounts = app.init_accounts(init_coins, 3).unwrap().into_iter();
             let deployer = accounts.next().unwrap();

@@ -172,7 +172,7 @@ pub mod test {
     };
 
     use super::*;
-    use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal};
+    use cosmwasm_std::{coin, testing::mock_dependencies, Addr, Api, Coin, Decimal };
     use osmosis_test_tube::Account;
 
     #[test]
@@ -609,21 +609,15 @@ pub mod test {
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
-        println!("{:?}", vault_mockup.vault_balances_query());
 
         vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
-        println!("--------------------");
-        println!("{:?}", vault_mockup.vault_balances_query());
-        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 120_000_00).unwrap();
-        println!("{:?}", vault_mockup.vault_balances_query());
-        println!("--------------------");
-
-        println!("{:?}", pool_mockup.pool().current_sqrt_price);
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 120_000_000).unwrap();
         let shares_got = vault_mockup.shares_query(&pool_mockup.user2.address());
         vault_mockup.withdraw(shares_got, &pool_mockup.user2).unwrap();
-        println!("{:?}", vault_mockup.vault_balances_query());
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
 
     #[test]
@@ -839,8 +833,8 @@ pub mod test {
         assert!(limit_bals.bal0_fees.is_zero());
         assert!(limit_bals.bal1_fees.is_zero());
         assert!(limit_bals.bal0.is_zero());
-        // 5_000 tokens out of proportion, -1 atom.
-        assert_eq!(limit_bals.bal1, Uint128::new(4999));
+        // 5_000 tokens out of proportion, -1 dust atom, -1 osmosis retardation dust.
+        assert_eq!(limit_bals.bal1, Uint128::new(4998));
     }
 
     /// We will create a vault with only a limit position. Then the price will
@@ -883,8 +877,7 @@ pub mod test {
         );
         let delta_x = delta_x.to_uint_floor();
 
-        // NOTE: We subtract 1 for atomic reasons.
-        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user2, delta_x.u128() - 1).unwrap();
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user2, delta_x.u128()).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
 
         let position_ids = vault_mockup.vault_state_query();
@@ -938,14 +931,16 @@ pub mod test {
         );
 
         let bals = vault_mockup.position_balances_query(PositionType::FullRange);
-        assert_eq!(bals.bal0.u128(), x - 1);
-        assert_eq!(bals.bal1.u128(), y - 1);
+        // 1 atom for precision, 1 atom for osmosis math retardation.
+        assert_eq!(bals.bal0.u128(), x - 2);
+        assert_eq!(bals.bal1.u128(), y - 2);
         assert!(bals.bal0_fees.is_zero() && bals.bal1_fees.is_zero());
         assert_eq!(vault_mockup.position_balances_query(PositionType::Base), default_bals);
         assert_eq!(vault_mockup.position_balances_query(PositionType::Limit), default_bals);
 
-        assert!(pool_mockup.osmo_balance_query(&vault_mockup.vault_addr).is_zero());
-        assert!(pool_mockup.usdc_balance_query(&vault_mockup.vault_addr).is_zero());
+        // 1 atom of idle reserves bc of osmosis math retardation.
+        assert_eq!(pool_mockup.osmo_balance_query(&vault_mockup.vault_addr), Uint128::one());
+        assert_eq!(pool_mockup.usdc_balance_query(&vault_mockup.vault_addr), Uint128::one());
 
         pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 20_000).unwrap();
         let bals = vault_mockup.position_balances_query(PositionType::FullRange);
@@ -966,9 +961,9 @@ pub mod test {
         assert_eq!(vault_mockup.position_balances_query(PositionType::Base), default_bals);
         assert_ne!(vault_mockup.position_balances_query(PositionType::Limit), default_bals);
 
-        // NOTE: 2 rebalances => 2 atoms. TODO: What about USDC atoms?
-        assert_eq!(pool_mockup.osmo_balance_query(&vault_mockup.vault_addr).u128(), 2);
-        assert_eq!(pool_mockup.usdc_balance_query(&vault_mockup.vault_addr).u128(), 0);
+        // NOTE: 2 rebalances => 2 atoms + 2 osmosis retardation atoms. TODO: What about USDC atoms?
+        assert_eq!(pool_mockup.osmo_balance_query(&vault_mockup.vault_addr).u128(), 4);
+        assert_eq!(pool_mockup.usdc_balance_query(&vault_mockup.vault_addr).u128(), 2);
     }
 
     /*
@@ -1079,11 +1074,10 @@ pub mod test {
         assert!(bals.bal1.is_zero() && !bals.bal0.is_zero());
     }
 
-    /*
     #[test]
     fn narrow_base_position() {
         let pool_mockup = PoolMockup::new(100_000_000, 100_000_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.001", "2", "0"));
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.0001", "2", "0"));
         vault_mockup.deposit(10_000, 10_000, &pool_mockup.user2).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
@@ -1091,9 +1085,117 @@ pub mod test {
     #[test]
     fn narrow_base_position_with_large_reserves() {
         let pool_mockup = PoolMockup::new(1_000_000_000, 1_000_000_000);
-        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.001", "2", "0"));
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.0001", "2", "0"));
         vault_mockup.deposit(10_000_000, 10_000_000, &pool_mockup.user2).unwrap();
         vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
     }
-    */
+
+    #[test]
+    fn min_liq_attack_on_narrow_vault() {
+        let pool_mockup = PoolMockup::new(1_000_000_000, 90_123_456_789_000);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.01", "1.01", "0"));
+
+        let (osmo_in, usdc_in) = (9_818_388, 20_000_000_000);
+        vault_mockup.deposit(osmo_in, usdc_in, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 120_000_000).unwrap();
+
+        let pre_bals = vault_mockup.vault_balances_query();
+        vault_mockup.deposit(100_000, 100_000, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        let post_bals = vault_mockup.vault_balances_query();
+        assert!(pre_bals.bal0 <= post_bals.bal0);
+        assert!(pre_bals.bal1 <= post_bals.bal1);
+        
+        let pre_bals = vault_mockup.vault_balances_query();
+        vault_mockup.deposit(100_000, 100_000, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        let post_bals = vault_mockup.vault_balances_query();
+        assert!(pre_bals.bal0 <= post_bals.bal0);
+        assert!(pre_bals.bal1 <= post_bals.bal1);
+        assert_eq!(pre_bals.admin_unclaimed_fees0, post_bals.admin_unclaimed_fees0);
+        assert_eq!(pre_bals.admin_unclaimed_fees1, post_bals.admin_unclaimed_fees1);
+        assert_eq!(pre_bals.protocol_unclaimed_fees0, post_bals.protocol_unclaimed_fees0);
+        assert_eq!(pre_bals.protocol_unclaimed_fees1, post_bals.protocol_unclaimed_fees1);
+
+        let pre_bals = vault_mockup.vault_balances_query();
+        vault_mockup.deposit(100_000, 100_000, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        let post_bals = vault_mockup.vault_balances_query();
+        assert!(pre_bals.bal0 <= post_bals.bal0);
+        assert!(pre_bals.bal1 <= post_bals.bal1);
+        assert_eq!(pre_bals.admin_unclaimed_fees0, post_bals.admin_unclaimed_fees0);
+        assert_eq!(pre_bals.admin_unclaimed_fees1, post_bals.admin_unclaimed_fees1);
+        assert_eq!(pre_bals.protocol_unclaimed_fees0, post_bals.protocol_unclaimed_fees0);
+        assert_eq!(pre_bals.protocol_unclaimed_fees1, post_bals.protocol_unclaimed_fees1);
+    }
+
+    #[test]
+    fn cant_overflow_with_256bits_liquidity() {
+        //Eg; huge SETH/ETH pool (18 dec each token).
+        let (x_in, y_in) = (1200 * 10u128.pow(18), 1000 * 10u128.pow(18));
+        let pool_mockup = PoolMockup::new(x_in, y_in);
+        // Eg; highly concentrated SETH/ETH pool (as its stable pair).
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.0001", "1.0001", "0"));
+
+        vault_mockup.deposit(x_in, y_in, &pool_mockup.user1).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        vault_mockup.deposit(x_in, y_in, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, x_in/2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        vault_mockup.deposit(x_in/3, y_in/3, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        vault_mockup.deposit(x_in/3, y_in/3, &pool_mockup.user2).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user2.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user2).unwrap();
+    }
+
+    #[test]
+    fn dust_in_positions_after_withdrawal() {
+        let (x_in, y_in) = (1200 * 10u128.pow(18), 1000 * 10u128.pow(18));
+        let pool_mockup = PoolMockup::new(x_in, y_in);
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.01", "1.01", "0"));
+        vault_mockup.deposit(127 * 10u128.pow(16), 101 * 10u128.pow(16), &pool_mockup.user1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, 345 * 10u128.pow(14)).unwrap();
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, 123 * 10u128.pow(14)).unwrap();
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 68 * 10u128.pow(14)).unwrap();
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user1, 721 * 10u128.pow(14)).unwrap();
+        pool_mockup.swap_usdc_for_osmo(&pool_mockup.user1, 555 * 10u128.pow(14)).unwrap();
+
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+    }
+
+    #[test]
+    fn improper_calculations_during_realistic_narrow_strategy() {
+        let (x_in, y_in) = (1200 * 10u128.pow(18), 1000 * 10u128.pow(18));
+        let pool_mockup = PoolMockup::new(x_in, y_in);
+
+        let vault_mockup = VaultMockup::new(&pool_mockup, vault_params("1.01", "1.005", "0"));
+        vault_mockup.deposit(46000000000000000, 42000000000000000, &pool_mockup.user1).unwrap();
+
+        pool_mockup.swap_osmo_for_usdc(&pool_mockup.user2, 1).unwrap();
+        vault_mockup.rebalance(&pool_mockup.deployer).unwrap();
+        let shares = vault_mockup.shares_query(&pool_mockup.user1.address());
+        vault_mockup.withdraw(shares, &pool_mockup.user1).unwrap();
+    }
 }

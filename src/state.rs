@@ -8,7 +8,7 @@ use crate::{
     msg::{VaultInfoInstantiateMsg, VaultParametersInstantiateMsg, VaultRebalancerInstantiateMsg},
 };
 use cosmwasm_schema::cw_serde;
-use cosmwasm_std::{Addr, Decimal, Deps, Env, QuerierWrapper, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Decimal, Decimal256, Deps, Env, QuerierWrapper, Timestamp, Uint128};
 use cw_storage_plus::Item;
 use osmosis_std::types::osmosis::twap::v1beta1::TwapQuerier;
 use osmosis_std::types::osmosis::{
@@ -37,6 +37,11 @@ impl Weight {
     pub fn mul_dec(&self, value: &Decimal) -> Decimal {
         // Invariant: A weight product wont ever overflow.
         value.checked_mul(self.0).unwrap()
+    }
+
+    pub fn mul_dec256(&self, value: &Decimal256) -> Decimal256 {
+        // Invariant: A weight product wont ever overflow.
+        value.checked_mul(self.0.into()).unwrap()
     }
 
     pub fn mul_raw(&self, value: Uint128) -> Decimal {
@@ -553,3 +558,4 @@ pub const VAULT_STATE: Item<VaultState> = Item::new("vault_state");
 
 /// FEES_INFO Holds any uncollected admin/protocol fees and fee parameters.
 pub const FEES_INFO: Item<FeesInfo> = Item::new("fees_info");
+
