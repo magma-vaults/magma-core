@@ -1,0 +1,25 @@
+name: Cosmwasm Optimizer
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build
+      run: | 
+        docker run --rm -v "$(pwd)":/code \
+        --mount type=volume,source="$(basename "$(pwd)")_cache",target=/target \
+        --mount type=volume,source=registry_cache,target=/usr/local/cargo/registry \
+        cosmwasm/optimizer:0.16.0
+      
